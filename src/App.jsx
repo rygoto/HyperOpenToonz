@@ -24,6 +24,9 @@ import Transport from './components/Transport.jsx'
 import Timeline from './components/Timeline.jsx'
 import BackgroundPanel from './components/BackgroundPanel.jsx'
 import TrackPanel from './components/TrackPanel.jsx'
+import { exportComposedVideo } from './engine/exportVideo.js'
+import { fileStamp, saveBlob } from './engine/saveFile.js'
+import { useMatchMedia } from './hooks/useMatchMedia.js'
 
 const DEFAULT_CELL_FPS = 12
 const FALLBACK_DURATION = 5
@@ -60,6 +63,10 @@ export default function App() {
   const [volume, setVolume] = useState(1)
   const [busy, setBusy] = useState(null)
   const [notice, setNotice] = useState(null)
+  const [assetsOpen, setAssetsOpen] = useState(false)
+  const [frozen, setFrozen] = useState(false)
+  const [exportResult, setExportResult] = useState(null)
+  const compact = useMatchMedia('(max-width: 960px)')
 
   // 描画ループやショートカットから最新値を読むためのミラー
   const tracksRef = useRef(tracks)
@@ -553,6 +560,72 @@ export default function App() {
     [addAudioTracks, addCellTrack, pickBackground, say],
   )
 
+  const startExport = useCallback(async () => {
+    const duration = projectDurationSec(tracksRef.current, backgroundRef.current)
+    if (!backgroundRef.current && tracksRef.current.length === 0) {
+      say('書き出す素材がありません', 'error')
+      return
+    }
+    const dur = duration > 0 ? duration : FALLBACK_DURATION
+    clock.pause()
+    setAssetsOpen(false)
+    const ac = new AbortController()
+    setFrozen(true)
+    setExportResult(null)
+    setBusy({
+      label: 'MP4 を書き出し中…',
+      done: 0,
+      total: 1,
+      onCancel: () => ac.abort(),
+    })
+    try {
+      const blob = await exportComposedVideo({
+        view: {
+          width: stage.width,
+          height: stage.height,
+          background: backgroundRef.current,
+          bgFit: stage.bgFit,
+          bgColor: stage.bgColor,
+          checker: false,
+          tracks: tracksRef.current,
+        },
+        duration: dur,
+        fps: projectFps,
+        volume: muted ? 0 : volume,
+        signal: ac.signal,
+        onProgress: (done, total, label) =>
+          setBusy({
+            label: label || 'MP4 を書き出し中…',
+            done,
+            total,
+            onCancel: () => ac.abort(),
+          }),
+      })
+      const ext = (blob.type || '').includes('webm') ? 'webm' : 'mp4'
+      setExportResult({ blob, filename: `PiyopiyoToonz-${fileStamp()}.${ext}` })
+      say('書き出しが完了しました。保存してください')
+    } catch (e) {
+      if (e?.name === 'AbortError') say('書き出しをキャンセルしました')
+      else say(e?.message || '書き出しに失敗しました', 'error')
+    } finally {
+      setBusy(null)
+      setFrozen(false)
+    }
+  }, [clock, muted, projectFps, say, stage, volume])
+
+  const saveExport = useCallback(async () => {
+    if (!exportResult) return
+    try {
+      const result = await saveBlob(exportResult.blob, exportResult.filename)
+      if (result !== 'cancelled') {
+        say('保存しました')
+        setExportResult(null)
+      }
+    } catch (e) {
+      say(e?.message || '保存できませんでした', 'error')
+    }
+  }, [exportResult, say])
+
   const view = useMemo(
     () => ({
       width: stage.width,
@@ -564,20 +637,48 @@ export default function App() {
       tracks,
       muted,
       volume,
+      frozen,
     }),
-    [stage, background, tracks, muted, volume],
+    [stage, background, tracks, muted, volume, frozen],
   )
 
   return (
-    <div className="app">
+    <div className={'app' + (compact ? ' app--compact' : '')}>
       <header className="topbar">
-        <h1>PiyopiyoToonz</h1>
-        <span className="topbar__sub">背景 × 透過セル連番 コンポジター</span>
+        <div className="topbar__brand">
+          <h1>PiyopiyoToonz</h1>
+          <span className="topbar__sub">背景 × 透過セル連番 コンポジター</span>
+        </div>
         {notice && <div className={'notice notice--' + notice.tone}>{notice.message}</div>}
+        <div className="topbar__actions">
+          {compact && (
+            <button
+              className={assetsOpen ? 'primary' : ''}
+              onClick={() => setAssetsOpen((v) => !v)}
+            >
+              {assetsOpen ? '閉じる' : '素材'}
+            </button>
+          )}
+          <button className="primary" disabled={!!busy || frozen} onClick={startExport}>
+            MP4書き出し
+          </button>
+        </div>
       </header>
 
       <div className="app__body">
-        <aside className="sidebar">
+        {compact && assetsOpen && (
+          <button className="drawer-backdrop" aria-label="素材パネルを閉じる" onClick={() => setAssetsOpen(false)} />
+        )}
+        <aside
+          className={'sidebar' + (compact && assetsOpen ? ' is-open' : '')}
+          aria-hidden={compact && !assetsOpen}
+        >
+          {compact && (
+            <div className="sidebar__drawer-head">
+              <strong>素材</strong>
+              <button onClick={() => setAssetsOpen(false)}>閉じる</button>
+            </div>
+          )}
           <BackgroundPanel
             background={background}
             onPick={pickBackground}
@@ -611,6 +712,12 @@ export default function App() {
             selectionCount={selection.length}
             onSplit={splitAtPlayhead}
             onDelete={deleteSelection}
+            onCopy={() => {
+              if (copySelection()) say('コピーしました')
+            }}
+            onCut={cutSelection}
+            onPaste={paste}
+            onDuplicate={duplicateSelection}
             onUndo={undo}
             onRedo={redo}
           />
@@ -642,6 +749,28 @@ export default function App() {
                 </p>
               </>
             )}
+            {busy.onCancel && (
+              <button className="wide" onClick={busy.onCancel}>
+                キャンセル
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {exportResult && !busy && (
+        <div className="overlay">
+          <div className="overlay__box">
+            <p>書き出しが完了しました</p>
+            <p className="hint">{exportResult.filename}</p>
+            <div className="row">
+              <button className="primary wide" onClick={saveExport}>
+                保存 / 共有
+              </button>
+              <button className="wide" onClick={() => setExportResult(null)}>
+                閉じる
+              </button>
+            </div>
           </div>
         </div>
       )}

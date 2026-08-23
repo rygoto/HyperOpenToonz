@@ -20,24 +20,30 @@ export default function Transport({
   selectionCount,
   onSplit,
   onDelete,
+  onCopy,
+  onCut,
+  onPaste,
+  onDuplicate,
   onUndo,
   onRedo,
 }) {
   const st = useSyncExternalStore(clock.subscribe, clock.getSnapshot)
+  const hasSel = selectionCount > 0
 
   return (
     <div className="transport">
       <div className="transport__buttons">
-        <button title="先頭へ (Home)" onClick={() => clock.stop()}>⏮</button>
-        <button title="1コマ戻る (←)" onClick={() => clock.stepFrames(-1, projectFps)}>◀︎</button>
+        <button type="button" title="先頭へ (Home)" onClick={() => clock.stop()}>⏮</button>
+        <button type="button" title="1コマ戻る (←)" onClick={() => clock.stepFrames(-1, projectFps)}>◀︎</button>
         <button
+          type="button"
           className="transport__play"
           title="再生 / 一時停止 (Space)"
           onClick={() => clock.toggle()}
         >
           {st.playing ? '❙❙' : '▶'}
         </button>
-        <button title="1コマ進む (→)" onClick={() => clock.stepFrames(1, projectFps)}>▶︎</button>
+        <button type="button" title="1コマ進む (→)" onClick={() => clock.stepFrames(1, projectFps)}>▶︎</button>
       </div>
 
       <div className="transport__time">
@@ -49,13 +55,17 @@ export default function Transport({
         </span>
       </div>
 
-      <div className="transport__buttons">
-        <button title="再生ヘッドで分割 (Ctrl+B)" onClick={onSplit}>✂ 分割</button>
-        <button title="選択クリップを削除 (Del)" disabled={selectionCount === 0} onClick={onDelete}>
+      <div className="transport__buttons transport__edit">
+        <button type="button" title="再生ヘッドで分割 (Ctrl+B)" onClick={onSplit}>✂ 分割</button>
+        <button type="button" title="選択クリップを削除 (Del)" disabled={!hasSel} onClick={onDelete}>
           削除{selectionCount > 1 ? ` (${selectionCount})` : ''}
         </button>
-        <button title="元に戻す (Ctrl+Z)" onClick={onUndo}>↺</button>
-        <button title="やり直す (Ctrl+Shift+Z)" onClick={onRedo}>↻</button>
+        <button type="button" title="コピー (Ctrl+C)" disabled={!hasSel} onClick={onCopy}>コピー</button>
+        <button type="button" title="切り取り (Ctrl+X)" disabled={!hasSel} onClick={onCut}>切り取り</button>
+        <button type="button" title="貼り付け (Ctrl+V)" onClick={onPaste}>貼付</button>
+        <button type="button" title="複製 (Ctrl+D)" disabled={!hasSel} onClick={onDuplicate}>複製</button>
+        <button type="button" title="元に戻す (Ctrl+Z)" onClick={onUndo}>↺</button>
+        <button type="button" title="やり直す (Ctrl+Shift+Z)" onClick={onRedo}>↻</button>
       </div>
 
       <label className="chk">

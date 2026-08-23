@@ -254,7 +254,7 @@ export default function TrackPanel({
       <button className="wide" onClick={() => audioInput.current.click()}>
         ＋ 音声ファイルを読み込む (mp3 / wav …)
       </button>
-      <p className="hint">連番はファイル名の数値順。フォルダのドラッグ＆ドロップも可。</p>
+      <p className="hint">連番はファイル名の数値順。PC はフォルダのドロップ、iPad は「ファイル」アプリから複数選択できます。</p>
 
       {tracks.length === 0 ? (
         <p className="empty">まだトラックがありません</p>

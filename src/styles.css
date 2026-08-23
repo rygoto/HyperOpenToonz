@@ -19,6 +19,7 @@ html,
 body,
 #root {
   height: 100%;
+  height: 100dvh;
   margin: 0;
 }
 
@@ -28,6 +29,16 @@ body {
   font-family: "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
   font-size: 13px;
   overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+button,
+a,
+label,
+summary {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(255, 176, 32, 0.2);
 }
 
 .mono {
@@ -47,6 +58,7 @@ button {
   padding: 5px 10px;
   font: inherit;
   cursor: pointer;
+  min-height: 34px;
 }
 
 button:hover:not(:disabled) {
@@ -107,15 +119,26 @@ input[type="color"] {
   display: flex;
   flex-direction: column;
   height: 100%;
+  height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
 }
 
 .topbar {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   padding: 8px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.topbar__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
 }
 
 .topbar h1 {
@@ -129,12 +152,19 @@ input[type="color"] {
   font-size: 11px;
 }
 
-.notice {
+.topbar__actions {
   margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.notice {
   padding: 3px 10px;
   border-radius: 999px;
   background: #2c2c36;
   border: 1px solid var(--line);
+  max-width: min(420px, 100%);
 }
 
 .notice--error {
@@ -393,7 +423,7 @@ input[type="color"] {
 .transport {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   padding: 6px 12px;
   background: var(--panel);
   border-top: 1px solid var(--line);
@@ -403,10 +433,15 @@ input[type="color"] {
 .transport__buttons {
   display: flex;
   gap: 4px;
+  flex-wrap: wrap;
 }
 
 .transport__buttons button {
-  min-width: 34px;
+  min-width: 44px;
+}
+
+.transport__edit button {
+  min-width: 0;
 }
 
 .transport__play {
@@ -738,3 +773,106 @@ input[type="color"] {
   width: 100%;
   accent-color: var(--accent);
 }
+
+.overlay__box .row {
+  margin-top: 10px;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.sidebar__drawer-head {
+  display: none;
+}
+
+/* ---------- touch / iPad ---------- */
+
+@media (pointer: coarse) {
+  button {
+    min-height: 44px;
+    padding: 8px 12px;
+  }
+
+  input[type="number"],
+  input[type="text"],
+  select {
+    font-size: 16px;
+    min-height: 40px;
+  }
+
+  .transport__play {
+    min-width: 56px;
+  }
+
+  .tl {
+    height: min(38dvh, 320px);
+  }
+
+  .tl__headers {
+    width: 148px;
+  }
+
+  .clip__trim {
+    width: 18px;
+  }
+
+  .clip:hover .clip__trim,
+  .clip__trim {
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  .stage {
+    padding: 8px;
+  }
+}
+
+@media (max-width: 960px) {
+  .topbar__sub {
+    display: none;
+  }
+
+  .notice {
+    order: 3;
+    flex: 1 0 100%;
+    margin: 0;
+  }
+
+  .sidebar {
+    position: fixed;
+    z-index: 21;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(400px, 92vw);
+    padding-top: calc(10px + env(safe-area-inset-top));
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    box-shadow: 12px 0 40px rgba(0, 0, 0, 0.45);
+  }
+
+  .sidebar.is-open {
+    transform: none;
+  }
+
+  .sidebar__drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .viewer {
+    width: 100%;
+  }
+}
+

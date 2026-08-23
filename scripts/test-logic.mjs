@@ -201,3 +201,18 @@ test('clock: コマ送りはプロジェクト fps 基準', () => {
   c.stepFrames(-2, 24)
   assert.equal(Number(c.peek().time.toFixed(6)), Number((23 / 24).toFixed(6)))
 })
+
+test('evenSize: H.264 用に偶数へ切り上げる', async () => {
+  const { evenSize, mixSamples } = await import('../src/engine/mixAudio.js')
+  assert.equal(evenSize(1920), 1920)
+  assert.equal(evenSize(1080), 1080)
+  assert.equal(evenSize(1081), 1082)
+  assert.equal(evenSize(1), 2)
+  assert.equal(evenSize(0), 2)
+
+  const dst = new Float32Array([0, 0, 0, 0, 0, 0])
+  const src = new Float32Array([1, 2, 3])
+  assert.equal(mixSamples(dst, src, 2, 0, 3, 0.5), 3)
+  assert.deepEqual([...dst], [0, 0, 0.5, 1, 1.5, 0])
+  assert.equal(mixSamples(dst, src, 5, 0, 3, 1), 1)
+})

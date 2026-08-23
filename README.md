@@ -1,16 +1,77 @@
-# React + Vite
+# PiyopiyoToonz
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+ブラウザだけで動く、2D アニメ向けの簡易コンポジターです。背景（静止画または動画）の上に透過 PNG のセル連番を重ね、音声クリップと一緒にタイムラインで編集し、**編集結果を 1 本の MP4 として書き出せます**。PC のほか、iPad の Safari でも使えるようにタッチ操作と画面レイアウトを合わせています。
 
-Currently, two official plugins are available:
+## できること
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **背景** … png / jpeg / webp / mp4 / webm など
+- **セルトラック** … 透過 PNG 連番（ファイル名の数値順）。トラックごとに fps・不透明度・拡大・位置・合成モード
+- **音声トラック** … wav / mp3 / m4a など
+- **タイムライン編集** … 移動、トリム、分割、コピー / 切り取り / 貼り付け、複製、繰り返し、元に戻す
+- **プレビュー** … 背景の fps とセルの fps は独立。プロジェクト fps でコマ送り
+- **書き出し** … 画面に見えている合成結果（背景 + セル + 音声）を MP4 に書き出し
 
-## React Compiler
+## 使い方
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. 背景を読み込む（またはステージへドロップ）
+2. 「透過PNG連番を読み込む」でセルを追加する
+3. 必要なら音声を追加する
+4. タイムラインでタイミングを合わせ、プレビューで確認する
+5. 右上の **MP4書き出し** を押し、完了後に **保存 / 共有** する
 
-## Expanding the Oxlint configuration
+素材が無い状態では書き出せません。書き出し中はプレビューが一時停止します。
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+### iPad
+
+- Safari を使ってください（ホーム画面追加にも対応）
+- 画面が狭いときは上部の **素材** から背景・トラックを開きます
+- タイムラインはタップで選択、ドラッグで移動 / トリム、ピンチで拡大縮小
+- 分割・コピー・貼り付けなどは再生バーのボタンから操作できます（キーボード不要）
+- 透過 PNG は写真アプリより **ファイル** アプリからの読み込みが確実です（アルファが保たれやすいため）
+- 書き出し後の **保存 / 共有** で、ファイルアプリや他のアプリへ渡せます
+
+### PC のショートカット
+
+| 操作 | キー |
+| --- | --- |
+| 再生 / 停止 | Space |
+| コマ送り | ← → （Shift で 1 秒） |
+| クリップをずらす | Alt + ← → |
+| 分割 | Ctrl+B（Mac は ⌘B） |
+| コピー / 切り取り / 貼り付け | Ctrl+C / X / V |
+| 複製 | Ctrl+D |
+| 削除 | Delete |
+| 元に戻す / やり直す | Ctrl+Z / Ctrl+Shift+Z |
+| 先頭へ | Home |
+| タイムライン拡大 | Ctrl + ホイール |
+
+## 開発
+
+```bash
+npm install
+npm run dev
+```
+
+ブラウザで表示された URL を開きます。同じ LAN 上の iPad からアクセスする場合は、Vite が案内する Network の URL を使います。
+
+```bash
+npm run build
+npm run preview
+```
+
+ロジックの確認:
+
+```bash
+node --test scripts/test-logic.mjs
+```
+
+## 書き出しについて
+
+- 出力はステージの解像度・プロジェクト fps に従います
+- ブラウザが H.264 エンコードに対応していれば MP4、そうでなければ MediaRecorder で mp4（だめな環境では webm）になります
+- プレビューのミュートがオンのときは、書き出し音声も無音になります
+- 市松模様はプレビュー専用で、書き出しには入りません
+
+## 技術
+
+React + Vite。合成は Canvas 2D。音声は Web Audio。書き出しは [Mediabunny](https://mediabunny.dev/)（WebCodecs）と MediaRecorder の併用です。

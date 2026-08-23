@@ -71,12 +71,14 @@ export default function Stage({ clock, audio, view, onDropFiles }) {
 
     const tick = (now) => {
       raf = requestAnimationFrame(tick)
+      const v = viewRef.current
+      if (v.frozen) return
+
       const dt = Math.min(0.25, (now - last) / 1000)
       last = now
 
       clock.advance(dt)
       const st = clock.peek()
-      const v = viewRef.current
       const volume = v.muted ? 0 : v.volume
 
       const bg = v.background

@@ -7,8 +7,8 @@ import {
   trimClipEnd,
   trimClipStart,
 } from '../engine/timeline.js'
+import { useMatchMedia } from '../hooks/useMatchMedia.js'
 
-const ROW_H = 30
 const RULER_H = 22
 const SNAP_PX = 8
 const STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
@@ -105,11 +105,33 @@ export default function Timeline({
   onTrackPatch,
 }) {
   const st = useSyncExternalStore(clock.subscribe, clock.getSnapshot)
+  const coarse = useMatchMedia('(pointer: coarse)')
+  const ROW_H = coarse ? 44 : 30
   const [pxPerSec, setPxPerSec] = useState(90)
   const [viewport, setViewport] = useState({ left: 0, width: 800 })
   const scrollRef = useRef(null)
   const contentRef = useRef(null)
   const drag = useRef(null)
+  const pointers = useRef(new Map())
+  const pinch = useRef(null)
+  const pxRef = useRef(90)
+
+  useEffect(() => {
+    pxRef.current = pxPerSec
+  }, [pxPerSec])
+
+  useEffect(() => {
+    const up = (e) => {
+      pointers.current.delete(e.pointerId)
+      if (pointers.current.size < 2) pinch.current = null
+    }
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    return () => {
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+    }
+  }, [])
 
   const lengthSec = Math.max(st.duration, 8) + 4
   const contentW = lengthSec * pxPerSec
@@ -188,6 +210,7 @@ export default function Timeline({
   // ---- クリップ操作 ----
   const onGrab = (e, track, clip, mode) => {
     if (e.button !== 0) return
+    if (pinch.current) return
     e.stopPropagation()
     e.preventDefault()
 
@@ -306,7 +329,8 @@ export default function Timeline({
 
   const onSurfaceDown = (e) => {
     if (e.button !== 0) return
-    e.currentTarget.setPointerCapture(e.pointerId)
+    if (pinch.current || pointers.current.size > 1) return
+    if (!coarse) e.currentTarget.setPointerCapture(e.pointerId)
     drag.current = { mode: 'scrub' }
     clock.pause()
     scrub(e)
@@ -318,7 +342,7 @@ export default function Timeline({
   }
 
   const onWheel = (e) => {
-    if (!e.ctrlKey) return
+    if (!e.ctrlKey && !e.metaKey) return
     e.preventDefault()
     const el = scrollRef.current
     const anchor = (el.scrollLeft + e.clientX - el.getBoundingClientRect().left) / pxPerSec
@@ -329,13 +353,44 @@ export default function Timeline({
     })
   }
 
+  const pinchDist = () => {
+    const pts = [...pointers.current.values()]
+    if (pts.length < 2) return 0
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
+  }
+
+  const onPinchPointerDown = (e) => {
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pointers.current.size === 2) {
+      pinch.current = { dist: pinchDist(), px: pxRef.current }
+      drag.current = null
+    }
+  }
+
+  const onPinchPointerMove = (e) => {
+    if (!pointers.current.has(e.pointerId)) return
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (!pinch.current || pointers.current.size < 2) return
+    const d = pinchDist()
+    if (d < 8) return
+    const next = Math.min(2000, Math.max(6, pinch.current.px * (d / pinch.current.dist)))
+    setPxPerSec(next)
+  }
+
+  const onPinchPointerUp = (e) => {
+    pointers.current.delete(e.pointerId)
+    if (pointers.current.size < 2) pinch.current = null
+  }
+
   const rows = tracks.length + 1
 
   return (
     <div className="tl">
       <div className="tl__toolbar">
         <span className="tl__hint dim">
-          クリックで選択 / ドラッグで移動 / 端をドラッグでトリム ・ Ctrl+B 分割 ・ Ctrl+X/C/V ・ Del 削除 ・ Ctrl+Z 戻す
+          {coarse
+            ? 'タップで選択 / ドラッグで移動・トリム / ピンチで拡大'
+            : 'クリックで選択 / ドラッグで移動 / 端をドラッグでトリム ・ Ctrl+B 分割 ・ Ctrl+X/C/V ・ Del 削除 ・ Ctrl+Z 戻す'}
         </span>
         <div className="tl__zoom">
           <button onClick={() => setPxPerSec((p) => Math.max(6, p / 1.4))} title="縮小">−</button>
@@ -379,7 +434,15 @@ export default function Timeline({
           ))}
         </div>
 
-        <div className="tl__scroll" ref={scrollRef} onWheel={onWheel}>
+        <div
+          className="tl__scroll"
+          ref={scrollRef}
+          onWheel={onWheel}
+          onPointerDown={onPinchPointerDown}
+          onPointerMove={onPinchPointerMove}
+          onPointerUp={onPinchPointerUp}
+          onPointerCancel={onPinchPointerUp}
+        >
           <div
             className="tl__content"
             ref={contentRef}

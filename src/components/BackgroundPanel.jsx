@@ -40,6 +40,7 @@ export default function BackgroundPanel({ background, onPick, onClear, stage, on
           背景を読み込む (png / jpeg / mp4 / webm …)
         </button>
       )}
+      <p className="hint">iPad では写真・ファイルアプリから選べます。透過PNGは「ファイル」経由が確実です。</p>
 
       <label className="field wide">
         フィット
