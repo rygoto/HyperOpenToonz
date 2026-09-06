@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import {
   clipEndSec,
   clipLenSec,
+  isVisual,
   sortClips,
   trackFps,
   trimClipEnd,
@@ -62,7 +63,7 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
     <div
       className={
         'clip clip--' + track.type + (selected ? ' is-selected' : '') +
-        (track.type === 'cell' && !track.visible ? ' is-off' : '') +
+        (isVisual(track) && !track.visible ? ' is-off' : '') +
         (track.type === 'audio' && track.muted ? ' is-off' : '')
       }
       style={{
@@ -94,8 +95,8 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
 }
 
 export default function Timeline({
+  ref,
   clock,
-  background,
   tracks,
   projectFps,
   selection,
@@ -182,7 +183,6 @@ export default function Timeline({
   // ---- スナップ候補 ----
   const snapPoints = (excludeIds) => {
     const pts = [0, st.time]
-    if (background?.duration > 0) pts.push(background.duration)
     for (const tr of tracks) {
       for (const c of tr.clips) {
         if (excludeIds.includes(c.id)) continue
@@ -382,10 +382,10 @@ export default function Timeline({
     if (pointers.current.size < 2) pinch.current = null
   }
 
-  const rows = tracks.length + 1
+  const rows = tracks.length
 
   return (
-    <div className="tl">
+    <div className="tl" ref={ref}>
       <div className="tl__toolbar">
         <span className="tl__hint dim">
           {coarse
@@ -411,23 +411,19 @@ export default function Timeline({
       <div className="tl__body">
         <div className="tl__headers" style={{ height: RULER_H + rows * ROW_H }}>
           <div className="tl__corner" style={{ height: RULER_H }} />
-          <div className="tl__th" style={{ height: ROW_H }}>
-            <span className="tl__th-name">背景</span>
-          </div>
           {tracks.map((tr) => (
             <div className="tl__th" style={{ height: ROW_H }} key={tr.id}>
               <button
                 className={
-                  'tl__th-toggle' +
-                  ((tr.type === 'cell' ? tr.visible : !tr.muted) ? '' : ' is-off')
+                  'tl__th-toggle' + ((isVisual(tr) ? tr.visible : !tr.muted) ? '' : ' is-off')
                 }
-                title={tr.type === 'cell' ? '表示 / 非表示' : 'ミュート'}
+                title={isVisual(tr) ? '表示 / 非表示' : 'ミュート'}
                 onClick={() => {
                   onBeginEdit()
-                  onTrackPatch(tr.id, tr.type === 'cell' ? { visible: !tr.visible } : { muted: !tr.muted })
+                  onTrackPatch(tr.id, isVisual(tr) ? { visible: !tr.visible } : { muted: !tr.muted })
                 }}
               >
-                {tr.type === 'cell' ? (tr.visible ? '◉' : '◯') : tr.muted ? '🔇' : '🔊'}
+                {isVisual(tr) ? (tr.visible ? '◉' : '◯') : tr.muted ? '🔇' : '🔊'}
               </button>
               <span className="tl__th-name" title={tr.name}>{tr.name}</span>
             </div>
@@ -461,20 +457,6 @@ export default function Timeline({
                   <span>{fmtTick(t)}</span>
                 </div>
               ))}
-            </div>
-
-            <div className="tl__row" style={{ height: ROW_H, backgroundSize: `${gridPx}px 100%` }}>
-              {background && (
-                <div
-                  className={'clip clip--bg kind-' + background.kind}
-                  style={{
-                    left: 0,
-                    width: (background.duration > 0 ? background.duration : lengthSec) * pxPerSec,
-                  }}
-                >
-                  <span className="clip__label">{background.name}</span>
-                </div>
-              )}
             </div>
 
             {tracks.map((tr) => (

@@ -82,10 +82,10 @@ function waitEvent(el, event, errorLabel) {
 }
 
 /**
- * 背景素材を1つ読み込む。
- * image  … 静止画(尺は持たない)
- * video  … 映像+音声
- * audio  … 音声のみ(絵は無し。尺だけタイムラインに反映される)
+ * 背景 / BOOK に使う絵を1つ読み込む。
+ * image … 静止画(素材としての尺は持たない)
+ * video … 映像+音声
+ * 読み込んだ結果は App 側で bg トラックになる。
  */
 export async function loadBackground(file) {
   const kind = kindOf(file)
@@ -127,16 +127,6 @@ export async function loadBackground(file) {
     URL.revokeObjectURL(url)
     throw e
   }
-}
-
-export function disposeBackground(bg) {
-  if (!bg) return
-  if (bg.el && 'pause' in bg.el) {
-    bg.el.pause()
-    bg.el.removeAttribute('src')
-    bg.el.load?.()
-  }
-  URL.revokeObjectURL(bg.url)
 }
 
 /**

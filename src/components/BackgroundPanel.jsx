@@ -1,56 +1,49 @@
 import { useRef } from 'react'
 import { BACKGROUND_ACCEPT } from '../engine/media.js'
 
-const KIND_LABEL = { image: '静止画', video: '動画' }
+/**
+ * 背景 / BOOK の読み込みとステージ設定。
+ * 読み込んだ絵はレイヤー(トラック)になるので、重なり順はトラック側で入れ替える。
+ */
+export default function BackgroundPanel({ onAdd, stage, onStage }) {
+  const backInput = useRef(null)
+  const bookInput = useRef(null)
 
-export default function BackgroundPanel({ background, onPick, onClear, stage, onStage }) {
-  const inputRef = useRef(null)
+  const pick = (e, onTop) => {
+    const f = e.target.files?.[0]
+    if (f) onAdd(f, { onTop })
+    e.target.value = ''
+  }
 
   return (
     <section className="panel">
-      <h2 className="panel__title">背景</h2>
+      <h2 className="panel__title">背景 / BOOK</h2>
 
       <input
-        ref={inputRef}
+        ref={backInput}
         type="file"
         accept={BACKGROUND_ACCEPT}
         hidden
-        onChange={(e) => {
-          const f = e.target.files?.[0]
-          if (f) onPick(f)
-          e.target.value = ''
-        }}
+        onChange={(e) => pick(e, false)}
+      />
+      <input
+        ref={bookInput}
+        type="file"
+        accept={BACKGROUND_ACCEPT}
+        hidden
+        onChange={(e) => pick(e, true)}
       />
 
-      {background ? (
-        <div className="asset">
-          <div className="asset__name" title={background.name}>{background.name}</div>
-          <div className="asset__meta">
-            {KIND_LABEL[background.kind]}
-            {background.width > 0 && ` · ${background.width}×${background.height}`}
-            {background.duration > 0 && ` · ${background.duration.toFixed(2)}s`}
-          </div>
-          <div className="row">
-            <button onClick={() => inputRef.current.click()}>差し替え</button>
-            <button className="danger" onClick={onClear}>外す</button>
-          </div>
-        </div>
-      ) : (
-        <button className="wide" onClick={() => inputRef.current.click()}>
-          背景を読み込む (png / jpeg / mp4 / webm …)
-        </button>
-      )}
-      <p className="hint">iPad では写真・ファイルアプリから選べます。透過PNGは「ファイル」経由が確実です。</p>
-
-      <label className="field wide">
-        フィット
-        <select value={stage.bgFit} onChange={(e) => onStage({ bgFit: e.target.value })}>
-          <option value="contain">全体を収める (contain)</option>
-          <option value="cover">画面を埋める (cover)</option>
-          <option value="fill">引き伸ばす (fill)</option>
-          <option value="none">原寸 (none)</option>
-        </select>
-      </label>
+      <button className="wide" onClick={() => backInput.current.click()}>
+        ＋ 背景を読み込む（一番奥へ）
+      </button>
+      <button className="wide" onClick={() => bookInput.current.click()}>
+        ＋ BOOK を読み込む（一番手前へ）
+      </button>
+      <p className="hint">
+        png / jpeg / mp4 / webm など。読み込んだ絵はレイヤーになるので、あとからトラックの
+        「▲ 奥へ / ▼ 手前へ」でセルの上にも下にも置けます。透過PNGは「ファイル」アプリ経由が確実です。
+      </p>
 
       <h2 className="panel__title">ステージ</h2>
 

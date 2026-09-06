@@ -496,8 +496,38 @@ input[type="color"] {
 
 /* ---------- timeline ---------- */
 
+.splitter {
+  flex: none;
+  height: 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  cursor: row-resize;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.splitter__grip {
+  width: 52px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line);
+  pointer-events: none;
+}
+
+.splitter:hover .splitter__grip,
+.splitter:focus-visible .splitter__grip {
+  background: var(--accent);
+}
+
+.splitter:focus-visible {
+  outline: none;
+}
+
 .tl {
-  height: 210px;
+  height: var(--tl-h, 210px);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -680,11 +710,9 @@ input[type="color"] {
 }
 
 .clip--bg {
-  background: #2f4b6b;
+  background-color: #2f4b6b;
   border: 1px solid #4a7bb0;
   color: #cfe3f7;
-  cursor: default;
-  pointer-events: none;
 }
 
 .clip--cell {
@@ -813,7 +841,17 @@ input[type="color"] {
   }
 
   .tl {
-    height: min(38dvh, 320px);
+    height: var(--tl-h, min(38dvh, 320px));
+  }
+
+  .splitter {
+    height: 24px;
+  }
+
+  .splitter__grip {
+    width: 72px;
+    height: 4px;
+    background: #4a4a56;
   }
 
   .tl__headers {

@@ -4,6 +4,7 @@ import { nextId } from './ids.js'
  * トラックとクリップのモデル。
  *
  *   cell  トラック … clip.in / clip.len の単位は「素材のコマ数」
+ *   bg    トラック … 背景 / BOOK。単位は秒(静止画は素材の尺を持たない)
  *   audio トラック … clip.in / clip.len の単位は「秒」
  *
  * clip.start は常にタイムライン上の秒。
@@ -12,14 +13,22 @@ import { nextId } from './ids.js'
  */
 
 export const isCell = (t) => t.type === 'cell'
+export const isBg = (t) => t.type === 'bg'
+
+/** 絵として重なるトラック(重なり順は配列の後ろほど手前) */
+export const isVisual = (t) => t.type === 'cell' || t.type === 'bg'
 
 export const trackFps = (t) => (t.fps > 0 ? t.fps : 24)
 
 /** clip.in / clip.len の単位を秒に直すための係数 */
 export const unitsPerSecond = (t) => (isCell(t) ? trackFps(t) : 1)
 
-/** 素材全体の長さ(クリップと同じ単位) */
-export const sourceUnits = (t) => (isCell(t) ? t.frames.length : t.duration)
+/** 素材全体の長さ(クリップと同じ単位)。静止画は尺を持たないので無限 */
+export const sourceUnits = (t) => {
+  if (isCell(t)) return t.frames.length
+  if (isBg(t)) return t.kind === 'video' && t.duration > 0 ? t.duration : Infinity
+  return t.duration
+}
 
 export const clipLenSec = (t, c) => c.len / unitsPerSecond(t)
 export const clipEndSec = (t, c) => c.start + clipLenSec(t, c)
@@ -33,8 +42,8 @@ export function trackEndSec(t) {
   return end
 }
 
-export function projectDurationSec(tracks, background) {
-  let d = background?.duration ?? 0
+export function projectDurationSec(tracks) {
+  let d = 0
   for (const t of tracks) d = Math.max(d, trackEndSec(t))
   return d
 }
@@ -50,6 +59,24 @@ export function makeClip(track, { start = 0, in: from = 0, len } = {}) {
 
 export function clipContains(track, clip, time) {
   return time >= clip.start && time < clipEndSec(track, clip)
+}
+
+/** time にかかっているクリップ。重なっていれば後ろのものを採る */
+export function activeClip(track, time) {
+  let hit = null
+  for (const c of track.clips) {
+    if (clipContains(track, c, time)) hit = c
+  }
+  return hit
+}
+
+/** 背景トラックが time に表示すべき、素材内の再生位置(静止画は常に0) */
+export function bgSourceTime(track, clip, time) {
+  if (track.kind !== 'video') return 0
+  const t = clip.in + (time - clip.start)
+  const dur = track.duration > 0 ? track.duration : 0
+  if (dur <= 0) return Math.max(0, t)
+  return Math.min(Math.max(0, t), Math.max(0, dur - 0.001))
 }
 
 /** 再生位置 time に表示すべきコマ。範囲外は null */

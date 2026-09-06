@@ -9,7 +9,8 @@ import {
   canEncodeVideo,
 } from 'mediabunny'
 import { composite } from './compositor.js'
-import { evenSize, bufferHasSignal, decodeBackgroundAudio, mixProjectAudio } from './mixAudio.js'
+import { activeClip, bgSourceTime } from './timeline.js'
+import { evenSize, bufferHasSignal, decodeBgAudio, mixProjectAudio } from './mixAudio.js'
 
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
@@ -86,16 +87,19 @@ async function prepareCanvas(view) {
 }
 
 async function paintFrame(ctx, exportView, time) {
-  const bg = exportView.background
-  if (bg?.kind === 'video') await seekVideo(bg.el, time)
+  for (const track of exportView.tracks) {
+    if (track.type !== 'bg' || track.kind !== 'video' || !track.el) continue
+    const clip = activeClip(track, time)
+    if (clip) await seekVideo(track.el, bgSourceTime(track, clip, time))
+  }
   composite(ctx, exportView, time)
 }
 
 async function mixAudio(view, duration, volume) {
-  const backgroundBuffer = await decodeBackgroundAudio(view.background)
+  const bgBuffers = await decodeBgAudio(view.tracks)
   const mixed = await mixProjectAudio({
     tracks: view.tracks,
-    backgroundBuffer,
+    bgBuffers,
     duration,
     volume,
   })
@@ -249,10 +253,12 @@ async function exportWithRecorder({ view, duration, fps, volume, signal, onProgr
  */
 export async function exportComposedVideo({ view, duration, fps, volume = 1, signal, onProgress }) {
   const dur = Math.max(1 / Math.max(1, fps), duration)
-  const bg = view.background
-  if (bg?.kind === 'video') {
-    bg.el.pause()
-    bg.el.muted = true
+  // 書き出し中はプレビュー用の再生を止め、音は mix 側から載せる
+  for (const track of view.tracks) {
+    if (track.type === 'bg' && track.kind === 'video' && track.el) {
+      track.el.pause()
+      track.el.muted = true
+    }
   }
 
   try {

@@ -1,8 +1,10 @@
 import { useRef } from 'react'
 import { AUDIO_ACCEPT } from '../engine/media.js'
-import { clipLenSec, trackFps } from '../engine/timeline.js'
+import { clipLenSec, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
 
 const FPS_PRESETS = [4, 6, 8, 12, 15, 24, 30]
+
+const KIND_LABEL = { image: '静止画', video: '動画' }
 
 function NumberField({ label, value, onChange, step = 1, min, max, suffix }) {
   return (
@@ -26,31 +28,10 @@ function NumberField({ label, value, onChange, step = 1, min, max, suffix }) {
   )
 }
 
-function CellBody({ track, onPatch, onRepeatFill }) {
+/** 絵のレイヤー(セル / 背景)に共通の配置・合成 */
+function TransformBody({ track, onPatch }) {
   return (
     <>
-      <div className="row">
-        <NumberField
-          label="セルのfps"
-          value={track.fps}
-          min={0.1}
-          step={1}
-          suffix="fps"
-          onChange={(v) => onPatch({ fps: Math.max(0.1, v) })}
-        />
-        <div className="presets">
-          {FPS_PRESETS.map((f) => (
-            <button
-              key={f}
-              className={track.fps === f ? 'is-active' : ''}
-              onClick={() => onPatch({ fps: f })}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <label className="field wide">
         不透明度 <span className="mono dim">{Math.round(track.opacity * 100)}%</span>
         <input
@@ -96,6 +77,57 @@ function CellBody({ track, onPatch, onRepeatFill }) {
           </select>
         </label>
       </div>
+    </>
+  )
+}
+
+function CellBody({ track, onPatch, onRepeatFill }) {
+  return (
+    <>
+      <div className="row">
+        <NumberField
+          label="セルのfps"
+          value={track.fps}
+          min={0.1}
+          step={1}
+          suffix="fps"
+          onChange={(v) => onPatch({ fps: Math.max(0.1, v) })}
+        />
+        <div className="presets">
+          {FPS_PRESETS.map((f) => (
+            <button
+              key={f}
+              className={track.fps === f ? 'is-active' : ''}
+              onClick={() => onPatch({ fps: f })}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <TransformBody track={track} onPatch={onPatch} />
+
+      <button onClick={onRepeatFill}>最後のクリップで尺いっぱいまで繰り返す</button>
+    </>
+  )
+}
+
+function BgBody({ track, onPatch, onRepeatFill }) {
+  return (
+    <>
+      <TransformBody track={track} onPatch={onPatch} />
+
+      {track.kind === 'video' && (
+        <label className="chk">
+          <input
+            type="checkbox"
+            checked={track.muted}
+            onChange={(e) => onPatch({ muted: e.target.checked })}
+          />
+          この動画の音を消す
+        </label>
+      )}
 
       <button onClick={onRepeatFill}>最後のクリップで尺いっぱいまで繰り返す</button>
     </>
@@ -125,38 +157,43 @@ function AudioBody({ track, onPatch }) {
   )
 }
 
+function trackMeta(track) {
+  if (track.type === 'cell') return `${track.frames.length}枚 ${track.fps}fps`
+  if (track.type === 'bg') return `${KIND_LABEL[track.kind] ?? '背景'} ${track.width}×${track.height}`
+  return '音声'
+}
+
 function TrackRow({ track, index, total, selection, onPatch, onClipPatch, onRemove, onMove, onRepeatFill }) {
   const selected = track.clips.filter((c) => selection.includes(c.id))
   const only = selected.length === 1 ? selected[0] : null
+  const visual = isVisual(track)
 
   return (
     <details className="layer" open={index === 0}>
       <summary className="layer__head">
         <button
-          className={
-            'layer__eye' + ((track.type === 'cell' ? track.visible : !track.muted) ? '' : ' is-off')
-          }
-          title={track.type === 'cell' ? '表示 / 非表示' : 'ミュート'}
+          className={'layer__eye' + ((visual ? track.visible : !track.muted) ? '' : ' is-off')}
+          title={visual ? '表示 / 非表示' : 'ミュート'}
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
-            onPatch(track.type === 'cell' ? { visible: !track.visible } : { muted: !track.muted })
+            onPatch(visual ? { visible: !track.visible } : { muted: !track.muted })
           }}
         >
-          {track.type === 'cell' ? (track.visible ? '◉' : '◯') : track.muted ? '🔇' : '🔊'}
+          {visual ? (track.visible ? '◉' : '◯') : track.muted ? '🔇' : '🔊'}
         </button>
         <span className="layer__name" title={track.name}>{track.name}</span>
-        <span className="layer__meta mono">
-          {track.type === 'cell' ? `${track.frames.length}枚 ${track.fps}fps` : '音声'}
-        </span>
+        <span className="layer__meta mono">{trackMeta(track)}</span>
       </summary>
 
       <div className="layer__body">
-        {track.type === 'cell' ? (
+        {track.type === 'cell' && (
           <CellBody track={track} onPatch={onPatch} onRepeatFill={onRepeatFill} />
-        ) : (
-          <AudioBody track={track} onPatch={onPatch} />
         )}
+        {track.type === 'bg' && (
+          <BgBody track={track} onPatch={onPatch} onRepeatFill={onRepeatFill} />
+        )}
+        {track.type === 'audio' && <AudioBody track={track} onPatch={onPatch} />}
 
         {only && (
           <div className="clip-inspector">
@@ -179,11 +216,8 @@ function TrackRow({ track, index, total, selection, onPatch, onClipPatch, onRemo
                 onChange={(v) =>
                   onClipPatch(track.id, only.id, {
                     len: Math.max(
-                      track.type === 'cell' ? 1 : 0.02,
-                      Math.min(
-                        v * (track.type === 'cell' ? trackFps(track) : 1),
-                        (track.type === 'cell' ? track.frames.length : track.duration) - only.in,
-                      ),
+                      minUnits(track),
+                      Math.min(v * unitsPerSecond(track), sourceUnits(track) - only.in),
                     ),
                   })
                 }
@@ -193,13 +227,11 @@ function TrackRow({ track, index, total, selection, onPatch, onClipPatch, onRemo
         )}
 
         <div className="row layer__actions">
-          <button disabled={index === 0} onClick={() => onMove(-1)}>▲ 前へ</button>
-          <button disabled={index === total - 1} onClick={() => onMove(1)}>▼ 後ろへ</button>
+          <button disabled={index === 0} onClick={() => onMove(-1)}>▲ 奥へ</button>
+          <button disabled={index === total - 1} onClick={() => onMove(1)}>▼ 手前へ</button>
           <button className="danger" onClick={onRemove}>削除</button>
         </div>
-        {track.type === 'cell' && (
-          <p className="hint">下にあるトラックほど手前に重なります（{track.width}×{track.height}）</p>
-        )}
+        {visual && <p className="hint">下にあるレイヤーほど手前に重なります</p>}
       </div>
     </details>
   )
@@ -221,7 +253,7 @@ export default function TrackPanel({
 
   return (
     <section className="panel">
-      <h2 className="panel__title">トラック</h2>
+      <h2 className="panel__title">レイヤー</h2>
 
       <input
         ref={cellInput}
@@ -257,7 +289,7 @@ export default function TrackPanel({
       <p className="hint">連番はファイル名の数値順。PC はフォルダのドロップ、iPad は「ファイル」アプリから複数選択できます。</p>
 
       {tracks.length === 0 ? (
-        <p className="empty">まだトラックがありません</p>
+        <p className="empty">まだレイヤーがありません</p>
       ) : (
         <div className="layer-list">
           {tracks.map((t, i) => (

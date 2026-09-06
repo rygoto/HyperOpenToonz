@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { composite } from '../engine/compositor.js'
 import { filesFromDataTransfer } from '../engine/media.js'
+import { activeClip, bgSourceTime } from '../engine/timeline.js'
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -9,13 +10,9 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
  * タイムベースはあくまで clock 側。ズレが小さいうちは再生速度を微調整して
  * 吸収し、大きくズレたときだけシークする(シーク時の途切れを減らすため)。
  */
-function syncVideo(el, bg, st) {
-  const dur = bg.duration || 0
-  const beyond = dur > 0 && st.time >= dur - 0.02
-
-  if (!st.playing || beyond) {
+function syncVideo(el, target, playing, rate) {
+  if (!playing) {
     if (!el.paused) el.pause()
-    const target = dur > 0 ? Math.min(st.time, dur) : st.time
     if (!el.seeking && Math.abs(el.currentTime - target) > 0.02) {
       try {
         el.currentTime = target
@@ -30,19 +27,33 @@ function syncVideo(el, bg, st) {
     el.play().catch(() => {})
   }
 
-  const drift = st.time - el.currentTime
+  const drift = target - el.currentTime
   if (Math.abs(drift) > 0.3) {
     if (!el.seeking) {
       try {
-        el.currentTime = st.time
+        el.currentTime = target
       } catch {
         /* noop */
       }
     }
-    el.playbackRate = st.rate
+    el.playbackRate = rate
   } else {
-    el.playbackRate = clamp(st.rate * (1 + drift * 0.5), st.rate * 0.94, st.rate * 1.06)
+    el.playbackRate = clamp(rate * (1 + drift * 0.5), rate * 0.94, rate * 1.06)
   }
+}
+
+/** 背景トラック1本ぶんの追従。クリップの外では止めておく */
+function syncBgTrack(track, st, muted, volume) {
+  const el = track.el
+  if (!el) return
+  el.muted = muted || !!track.muted
+  el.volume = volume
+  const clip = activeClip(track, st.time)
+  if (!clip) {
+    if (!el.paused) el.pause()
+    return
+  }
+  syncVideo(el, bgSourceTime(track, clip, st.time), st.playing, st.rate)
 }
 
 export default function Stage({ clock, audio, view, onDropFiles }) {
@@ -55,13 +66,21 @@ export default function Stage({ clock, audio, view, onDropFiles }) {
   // 背景動画の要素を DOM に置く(デコード・音声再生を確実にするため)
   useEffect(() => {
     const host = hostRef.current
-    const bg = view.background
-    if (!host || !bg || bg.kind !== 'video') return
-    host.appendChild(bg.el)
-    return () => {
-      if (bg.el.parentNode === host) host.removeChild(bg.el)
+    if (!host) return
+    const els = view.tracks
+      .filter((t) => t.type === 'bg' && t.kind === 'video' && t.el)
+      .map((t) => t.el)
+    for (const el of els) {
+      if (el.parentNode !== host) host.appendChild(el)
     }
-  }, [view.background])
+    // 消えたトラックの映像は止めて外す
+    for (const child of [...host.children]) {
+      if (!els.includes(child)) {
+        child.pause?.()
+        host.removeChild(child)
+      }
+    }
+  }, [view.tracks])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -81,11 +100,10 @@ export default function Stage({ clock, audio, view, onDropFiles }) {
       const st = clock.peek()
       const volume = v.muted ? 0 : v.volume
 
-      const bg = v.background
-      if (bg && bg.kind === 'video') {
-        bg.el.muted = v.muted
-        bg.el.volume = v.volume
-        syncVideo(bg.el, bg, st)
+      for (const track of v.tracks) {
+        if (track.type === 'bg' && track.kind === 'video') {
+          syncBgTrack(track, st, v.muted, v.volume)
+        }
       }
 
       audio.sync({

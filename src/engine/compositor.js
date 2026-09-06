@@ -1,4 +1,4 @@
-import { cellFrameIndex } from './timeline.js'
+import { activeClip, cellFrameIndex } from './timeline.js'
 
 /** src を dst の矩形にどう収めるか */
 export function fitRect(sw, sh, dw, dh, mode) {
@@ -13,12 +13,27 @@ export function fitRect(sw, sh, dw, dh, mode) {
   return { x: (dw - w) / 2, y: (dh - h) / 2, w, h }
 }
 
+/** トラックの fit / 拡大率 / オフセットを当てはめた描画先 */
+function placeRect(track, sw, sh, cw, ch) {
+  const base = fitRect(sw, sh, cw, ch, track.fit)
+  const w = base.w * track.scale
+  const h = base.h * track.scale
+  return {
+    x: base.x + (base.w - w) / 2 + track.x,
+    y: base.y + (base.h - h) / 2 + track.y,
+    w,
+    h,
+  }
+}
+
 /**
- * 1フレームぶんの合成。背景 → セルトラック(下から順)に重ねる。
+ * 1フレームぶんの合成。トラックは配列の順に重ねる(後ろにあるものほど手前)。
+ * 背景(bg)もセル(cell)も同じレイヤーとして扱うので、
+ * 背景をセルより手前に置けば BOOK になる。
  * 参照するのは各トラック自身の fps だけなので、背景が何 fps でも影響しない。
  */
 export function composite(ctx, view, time) {
-  const { width: cw, height: ch, background, bgFit, bgColor, tracks, checker } = view
+  const { width: cw, height: ch, bgColor, tracks, checker } = view
 
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.globalAlpha = 1
@@ -32,36 +47,39 @@ export function composite(ctx, view, time) {
     ctx.fillRect(0, 0, cw, ch)
   }
 
-  if (background && background.width > 0) {
-    const ready = background.kind !== 'video' || background.el.readyState >= 2
-    if (ready) {
-      const r = fitRect(background.width, background.height, cw, ch, bgFit)
-      ctx.drawImage(background.el, r.x, r.y, r.w, r.h)
-    }
-  }
-
   for (const track of tracks) {
-    if (track.type !== 'cell' || !track.visible) continue
-    for (const clip of track.clips) {
-      const idx = cellFrameIndex(track, clip, time)
-      if (idx == null) continue
-      const frame = track.frames[idx]
-      if (!frame) continue
-
-      const base = fitRect(track.width, track.height, cw, ch, track.fit)
-      const w = base.w * track.scale
-      const h = base.h * track.scale
-      const x = base.x + (base.w - w) / 2 + track.x
-      const y = base.y + (base.h - h) / 2 + track.y
-
-      ctx.globalAlpha = track.opacity
-      ctx.globalCompositeOperation = track.blend
-      ctx.drawImage(frame, x, y, w, h)
-    }
+    if (!track.visible) continue
+    if (track.type === 'bg') drawBg(ctx, track, cw, ch, time)
+    else if (track.type === 'cell') drawCell(ctx, track, cw, ch, time)
   }
 
   ctx.globalAlpha = 1
   ctx.globalCompositeOperation = 'source-over'
+}
+
+function drawBg(ctx, track, cw, ch, time) {
+  if (!(track.width > 0)) return
+  if (track.kind === 'video' && track.el.readyState < 2) return
+  if (!activeClip(track, time)) return
+
+  const r = placeRect(track, track.width, track.height, cw, ch)
+  ctx.globalAlpha = track.opacity
+  ctx.globalCompositeOperation = track.blend
+  ctx.drawImage(track.el, r.x, r.y, r.w, r.h)
+}
+
+function drawCell(ctx, track, cw, ch, time) {
+  for (const clip of track.clips) {
+    const idx = cellFrameIndex(track, clip, time)
+    if (idx == null) continue
+    const frame = track.frames[idx]
+    if (!frame) continue
+
+    const r = placeRect(track, track.width, track.height, cw, ch)
+    ctx.globalAlpha = track.opacity
+    ctx.globalCompositeOperation = track.blend
+    ctx.drawImage(frame, r.x, r.y, r.w, r.h)
+  }
 }
 
 function drawChecker(ctx, w, h) {

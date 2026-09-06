@@ -12,13 +12,7 @@ import {
   splitClip,
   trackEndSec,
 } from './engine/timeline.js'
-import {
-  disposeBackground,
-  kindOf,
-  loadBackground,
-  loadCellSequence,
-  sortByName,
-} from './engine/media.js'
+import { kindOf, loadBackground, loadCellSequence, sortByName } from './engine/media.js'
 import Stage from './components/Stage.jsx'
 import Transport from './components/Transport.jsx'
 import Timeline from './components/Timeline.jsx'
@@ -28,9 +22,23 @@ import { exportComposedVideo } from './engine/exportVideo.js'
 import { fileStamp, saveBlob } from './engine/saveFile.js'
 import { useMatchMedia } from './hooks/useMatchMedia.js'
 
-const DEFAULT_CELL_FPS = 12
+const DEFAULT_CELL_FPS = 8
 const FALLBACK_DURATION = 5
 const HISTORY_LIMIT = 100
+
+// 上下分割(プレビュー / タイムライン)の下限
+const MIN_TIMELINE_H = 96
+const MIN_STAGE_H = 140
+const SPLIT_KEY = 'piyopiyo.timelineHeight'
+
+function loadSplit() {
+  try {
+    const v = Number(window.localStorage.getItem(SPLIT_KEY))
+    return Number.isFinite(v) && v >= MIN_TIMELINE_H ? v : null
+  } catch {
+    return null
+  }
+}
 
 /** cutA_0001.png → cutA */
 function nameFromFiles(files) {
@@ -47,14 +55,12 @@ export default function App() {
   if (!audioRef.current) audioRef.current = createAudioEngine()
   const audio = audioRef.current
 
-  const [background, setBackground] = useState(null)
   const [tracks, setTracks] = useState([])
   const [selection, setSelection] = useState([])
   const [stage, setStage] = useState({
     width: 1920,
     height: 1080,
     autoSize: true,
-    bgFit: 'contain',
     bgColor: '#000000',
     checker: true,
   })
@@ -68,16 +74,20 @@ export default function App() {
   const [exportResult, setExportResult] = useState(null)
   const compact = useMatchMedia('(max-width: 960px)')
 
+  // タイムラインの高さ(null = CSS の既定値)
+  const [tlHeight, setTlHeight] = useState(loadSplit)
+  const viewerRef = useRef(null)
+  const tlRef = useRef(null)
+  const split = useRef(null)
+  const lastTap = useRef(0)
+
   // 描画ループやショートカットから最新値を読むためのミラー
   const tracksRef = useRef(tracks)
   tracksRef.current = tracks
   const selectionRef = useRef(selection)
   selectionRef.current = selection
-  const backgroundRef = useRef(background)
-  backgroundRef.current = background
   const history = useRef({ past: [], future: [] })
   const clipboard = useRef([])
-  const trash = useRef([])
 
   const say = useCallback((message, tone = 'info') => {
     setNotice({ message, tone })
@@ -129,29 +139,21 @@ export default function App() {
 
   // ---------- 尺・解像度 ----------
   useEffect(() => {
-    const d = projectDurationSec(tracks, background)
+    const d = projectDurationSec(tracks)
     clock.setDuration(d > 0 ? d : FALLBACK_DURATION)
-  }, [background, tracks, clock])
+  }, [tracks, clock])
 
   useEffect(() => {
     if (!stage.autoSize) return
+    // 背景があればその解像度、無ければ最初のセルに合わせる
     const src =
-      background && background.width > 0
-        ? background
-        : tracks.find((t) => t.type === 'cell' && t.width > 0)
+      tracks.find((t) => t.type === 'bg' && t.width > 0) ??
+      tracks.find((t) => t.type === 'cell' && t.width > 0)
     if (!src) return
     setStage((s) =>
       s.width === src.width && s.height === src.height ? s : { ...s, width: src.width, height: src.height },
     )
-  }, [background, tracks, stage.autoSize])
-
-  // 差し替えた背景の解放は、描画ループが新しい view を掴んだ後に行う
-  useEffect(() => {
-    if (trash.current.length === 0) return
-    const dead = trash.current
-    trash.current = []
-    for (const fn of dead) fn()
-  }, [background])
+  }, [tracks, stage.autoSize])
 
   // AudioContext は最初のユーザー操作で起こす
   useEffect(() => {
@@ -166,33 +168,141 @@ export default function App() {
 
   useEffect(() => () => audio.dispose(), [audio])
 
+  // ---------- 上下分割 ----------
+  const clampTl = useCallback((h) => {
+    const room = viewerRef.current?.clientHeight ?? 0
+    const max = room > 0 ? Math.max(MIN_TIMELINE_H, room - MIN_STAGE_H) : Infinity
+    return Math.round(Math.max(MIN_TIMELINE_H, Math.min(h, max)))
+  }, [])
+
+  const resetSplit = useCallback(() => {
+    setTlHeight(null)
+    try {
+      window.localStorage.removeItem(SPLIT_KEY)
+    } catch {
+      /* 保存できなくても動作に支障はない */
+    }
+  }, [])
+
+  const storeSplit = useCallback((h) => {
+    setTlHeight(h)
+    try {
+      window.localStorage.setItem(SPLIT_KEY, String(h))
+    } catch {
+      /* noop */
+    }
+  }, [])
+
+  // 画面の回転やウィンドウサイズの変化で潰れないように詰め直す
+  useEffect(() => {
+    const el = viewerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      setTlHeight((h) => (h == null ? h : clampTl(h)))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [clampTl])
+
+  const onSplitDown = useCallback(
+    (e) => {
+      if (e.button != null && e.button !== 0) return
+      // タッチのダブルタップで既定値に戻す
+      if (e.pointerType !== 'mouse') {
+        const now = performance.now()
+        if (now - lastTap.current < 320) {
+          lastTap.current = 0
+          resetSplit()
+          return
+        }
+        lastTap.current = now
+      }
+      e.preventDefault()
+      const h = tlRef.current?.getBoundingClientRect().height ?? MIN_TIMELINE_H
+      split.current = { y: e.clientY, base: h }
+      e.currentTarget.setPointerCapture(e.pointerId)
+    },
+    [resetSplit],
+  )
+
+  const onSplitMove = useCallback(
+    (e) => {
+      const d = split.current
+      if (!d) return
+      storeSplit(clampTl(d.base - (e.clientY - d.y)))
+    },
+    [clampTl, storeSplit],
+  )
+
+  const onSplitUp = useCallback(() => {
+    split.current = null
+  }, [])
+
+  const onSplitKey = useCallback(
+    (e) => {
+      const step = e.shiftKey ? 48 : 12
+      let next = null
+      if (e.code === 'ArrowUp') next = (tlRef.current?.getBoundingClientRect().height ?? 0) + step
+      else if (e.code === 'ArrowDown') next = (tlRef.current?.getBoundingClientRect().height ?? 0) - step
+      else if (e.code === 'Home' || e.code === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        resetSplit()
+        return
+      }
+      if (next == null) return
+      e.preventDefault()
+      e.stopPropagation()
+      storeSplit(clampTl(next))
+    },
+    [clampTl, resetSplit, storeSplit],
+  )
+
   // ---------- 素材の読み込み ----------
-  const pickBackground = useCallback(
-    async (file) => {
+  /**
+   * 背景 / BOOK を1枚のレイヤーとして足す。
+   * 既定では一番奥(配列の先頭)。onTop なら一番手前に置く。
+   */
+  const addBackgroundTrack = useCallback(
+    async (file, { onTop = false } = {}) => {
       setBusy({ label: `${file.name} を読み込み中…` })
       try {
-        const bg = await loadBackground(file)
-        const prev = backgroundRef.current
-        if (prev) trash.current.push(() => disposeBackground(prev))
-        backgroundRef.current = bg
-        setBackground(bg)
-        clock.pause()
-        clock.seek(0)
+        const src = await loadBackground(file)
+        const len =
+          src.kind === 'video' && src.duration > 0
+            ? src.duration
+            : Math.max(FALLBACK_DURATION, projectDurationSec(tracksRef.current))
+        const track = {
+          id: nextId('track'),
+          type: 'bg',
+          kind: src.kind,
+          name: src.name,
+          el: src.el,
+          url: src.url,
+          width: src.width,
+          height: src.height,
+          duration: src.duration,
+          fit: 'contain',
+          opacity: 1,
+          scale: 1,
+          x: 0,
+          y: 0,
+          blend: 'source-over',
+          visible: true,
+          muted: false,
+          clips: [],
+        }
+        track.clips = [makeClip(track, { start: 0, len })]
+        commit((prev) => (onTop ? [...prev, track] : [track, ...prev]))
+        say(`${src.name} を${onTop ? 'BOOK(手前)' : '背景'}レイヤーにしました`)
       } catch (e) {
         say(e.message, 'error')
       } finally {
         setBusy(null)
       }
     },
-    [clock, say],
+    [commit, say],
   )
-
-  const clearBackground = useCallback(() => {
-    const prev = backgroundRef.current
-    if (prev) trash.current.push(() => disposeBackground(prev))
-    backgroundRef.current = null
-    setBackground(null)
-  }, [])
 
   const addCellTrack = useCallback(
     async (files) => {
@@ -315,13 +425,12 @@ export default function App() {
       commit((prev) => {
         // 埋める先は「自分以外」の一番長いところ。何も無ければ既定の尺まで。
         const end = Math.max(
-          background?.duration ?? 0,
           FALLBACK_DURATION,
           ...prev.map((t) => (t.id === id ? 0 : trackEndSec(t))),
         )
         return prev.map((t) => (t.id === id ? repeatToFill(t, end) : t))
       }),
-    [background, commit],
+    [commit],
   )
 
   // ---------- クリップ編集 ----------
@@ -364,21 +473,43 @@ export default function App() {
     return true
   }, [])
 
-  const deleteSelection = useCallback(() => {
-    const sel = selectionRef.current
-    if (sel.length === 0) return
-    commit((prev) =>
-      prev.map((tr) =>
-        tr.clips.some((c) => sel.includes(c.id))
-          ? { ...tr, clips: tr.clips.filter((c) => !sel.includes(c.id)) }
-          : tr,
-      ),
-    )
-    setSelection([])
-  }, [commit])
+  /**
+   * 選択中のクリップを消す。
+   * クリップが1つも残らなかったレイヤーは丸ごと畳む(切り取りのときは貼り付け先として残す)。
+   */
+  const deleteSelection = useCallback(
+    (opts) => {
+      const dropEmpty = opts?.dropEmpty !== false
+      const sel = selectionRef.current
+      if (sel.length === 0) return
+      let emptied = 0
+      commit((prev) => {
+        const next = []
+        let changed = false
+        for (const tr of prev) {
+          if (!tr.clips.some((c) => sel.includes(c.id))) {
+            next.push(tr)
+            continue
+          }
+          changed = true
+          const clips = tr.clips.filter((c) => !sel.includes(c.id))
+          if (clips.length === 0 && dropEmpty) {
+            emptied++
+            continue
+          }
+          next.push({ ...tr, clips })
+        }
+        return changed ? next : prev
+      })
+      setSelection([])
+      if (emptied > 0) say(`空になった${emptied}つのレイヤーを削除しました`)
+    },
+    [commit, say],
+  )
 
   const cutSelection = useCallback(() => {
-    if (copySelection()) deleteSelection()
+    // 切り取り直後に貼り戻せるよう、空になってもレイヤーは残す
+    if (copySelection()) deleteSelection({ dropEmpty: false })
   }, [copySelection, deleteSelection])
 
   const paste = useCallback(() => {
@@ -543,7 +674,7 @@ export default function App() {
       }
       const video = files.find((f) => kindOf(f) === 'video')
       if (video) {
-        pickBackground(video)
+        addBackgroundTrack(video)
         return
       }
       const images = files.filter((f) => kindOf(f) === 'image')
@@ -551,18 +682,19 @@ export default function App() {
         say('対応していないファイルです', 'error')
         return
       }
-      if (images.length === 1 && !backgroundRef.current) {
-        pickBackground(images[0])
+      // 1枚だけで背景がまだ無いときは背景として扱う
+      if (images.length === 1 && !tracksRef.current.some((t) => t.type === 'bg')) {
+        addBackgroundTrack(images[0])
         return
       }
       addCellTrack(images)
     },
-    [addAudioTracks, addCellTrack, pickBackground, say],
+    [addAudioTracks, addBackgroundTrack, addCellTrack, say],
   )
 
   const startExport = useCallback(async () => {
-    const duration = projectDurationSec(tracksRef.current, backgroundRef.current)
-    if (!backgroundRef.current && tracksRef.current.length === 0) {
+    const duration = projectDurationSec(tracksRef.current)
+    if (tracksRef.current.length === 0) {
       say('書き出す素材がありません', 'error')
       return
     }
@@ -583,8 +715,6 @@ export default function App() {
         view: {
           width: stage.width,
           height: stage.height,
-          background: backgroundRef.current,
-          bgFit: stage.bgFit,
           bgColor: stage.bgColor,
           checker: false,
           tracks: tracksRef.current,
@@ -630,16 +760,14 @@ export default function App() {
     () => ({
       width: stage.width,
       height: stage.height,
-      background,
-      bgFit: stage.bgFit,
       bgColor: stage.bgColor,
-      checker: stage.checker && !background,
+      checker: stage.checker && !tracks.some((t) => t.type === 'bg'),
       tracks,
       muted,
       volume,
       frozen,
     }),
-    [stage, background, tracks, muted, volume, frozen],
+    [stage, tracks, muted, volume, frozen],
   )
 
   return (
@@ -680,9 +808,7 @@ export default function App() {
             </div>
           )}
           <BackgroundPanel
-            background={background}
-            onPick={pickBackground}
-            onClear={clearBackground}
+            onAdd={addBackgroundTrack}
             stage={stage}
             onStage={(patch) => setStage((s) => ({ ...s, ...patch }))}
           />
@@ -699,7 +825,11 @@ export default function App() {
           />
         </aside>
 
-        <main className="viewer">
+        <main
+          className="viewer"
+          ref={viewerRef}
+          style={tlHeight == null ? undefined : { '--tl-h': tlHeight + 'px' }}
+        >
           <Stage clock={clock} audio={audio} view={view} onDropFiles={onDropFiles} />
           <Transport
             clock={clock}
@@ -721,9 +851,25 @@ export default function App() {
             onUndo={undo}
             onRedo={redo}
           />
+          <div
+            className="splitter"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="プレビューとタイムラインの境界"
+            title="ドラッグで高さを変更 / ダブルタップで元に戻す"
+            tabIndex={0}
+            onPointerDown={onSplitDown}
+            onPointerMove={onSplitMove}
+            onPointerUp={onSplitUp}
+            onPointerCancel={onSplitUp}
+            onDoubleClick={resetSplit}
+            onKeyDown={onSplitKey}
+          >
+            <span className="splitter__grip" />
+          </div>
           <Timeline
+            ref={tlRef}
             clock={clock}
-            background={background}
             tracks={tracks}
             projectFps={projectFps}
             selection={selection}

@@ -4,9 +4,11 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fitRect } from '../src/engine/compositor.js'
+import { composite, fitRect } from '../src/engine/compositor.js'
 import { createClock } from '../src/engine/clock.js'
 import {
+  activeClip,
+  bgSourceTime,
   cellFrameIndex,
   clipEndSec,
   clipLenSec,
@@ -14,6 +16,7 @@ import {
   offsetClipsTo,
   projectDurationSec,
   repeatToFill,
+  sourceUnits,
   splitClip,
   trackEndSec,
   trimClipEnd,
@@ -26,6 +29,34 @@ const cellTrack = (over = {}) => ({
   frames: new Array(8),
   fps: 8,
   visible: true,
+  opacity: 1,
+  scale: 1,
+  x: 0,
+  y: 0,
+  fit: 'contain',
+  blend: 'source-over',
+  width: 100,
+  height: 100,
+  clips: [],
+  ...over,
+})
+
+const bgTrack = (over = {}) => ({
+  id: 'b1',
+  type: 'bg',
+  kind: 'image',
+  el: 'BG',
+  width: 100,
+  height: 100,
+  duration: 0,
+  visible: true,
+  muted: false,
+  opacity: 1,
+  scale: 1,
+  x: 0,
+  y: 0,
+  fit: 'contain',
+  blend: 'source-over',
   clips: [],
   ...over,
 })
@@ -150,11 +181,64 @@ test('貼り付けは相対位置を保ったまま移動する', () => {
   assert.equal(pasted[1].in, 4)
 })
 
-test('プロジェクトの尺は背景と全トラックの最大', () => {
+test('プロジェクトの尺は全レイヤーの最大', () => {
   const t = cellTrack({ clips: [{ id: 'c', start: 4, in: 0, len: 8 }] })
-  assert.equal(projectDurationSec([t], null), 5)
-  assert.equal(projectDurationSec([t], { duration: 12 }), 12)
-  assert.equal(projectDurationSec([], { duration: 3 }), 3)
+  assert.equal(projectDurationSec([t]), 5)
+  const bg = bgTrack({ clips: [{ id: 'b', start: 0, in: 0, len: 12 }] })
+  assert.equal(projectDurationSec([t, bg]), 12)
+  assert.equal(projectDurationSec([]), 0)
+})
+
+test('静止画の背景は尺を持たないので好きなだけ伸ばせる', () => {
+  const t = bgTrack({ clips: [{ id: 'b', start: 0, in: 0, len: 5 }] })
+  assert.equal(sourceUnits(t), Infinity)
+  assert.equal(trimClipEnd(t, t.clips[0], 60).len, 60)
+  assert.equal(bgSourceTime(t, t.clips[0], 3), 0) // 静止画は常に先頭
+})
+
+test('背景動画は素材の尺で止まり、クリップの in から再生される', () => {
+  const t = bgTrack({
+    kind: 'video',
+    duration: 10,
+    clips: [{ id: 'b', start: 2, in: 3, len: 4 }],
+  })
+  const c = t.clips[0]
+  assert.equal(sourceUnits(t), 10)
+  assert.equal(trimClipEnd(t, c, 99).len, 7) // 素材の残り(10 - 3)まで
+  assert.equal(bgSourceTime(t, c, 2), 3)
+  assert.equal(bgSourceTime(t, c, 4.5), 5.5)
+  assert.equal(activeClip(t, 1.9), null)
+  assert.equal(activeClip(t, 3), c)
+})
+
+test('重なり順: 配列の後ろにあるレイヤーほど手前に描かれる', () => {
+  const drawn = []
+  const ctx = {
+    setTransform() {},
+    clearRect() {},
+    fillRect() {},
+    drawImage(src) {
+      drawn.push(src)
+    },
+  }
+  const book = bgTrack({ id: 'book', el: 'BOOK', clips: [{ id: 'b', start: 0, in: 0, len: 5 }] })
+  const cell = cellTrack({ frames: ['cel0'], clips: [{ id: 'c', start: 0, in: 0, len: 1 }] })
+  const view = { width: 100, height: 100, bgColor: '#000000', checker: false }
+
+  composite(ctx, { ...view, tracks: [cell, book] }, 0)
+  assert.deepEqual(drawn, ['cel0', 'BOOK']) // BOOK がセルの手前
+
+  drawn.length = 0
+  composite(ctx, { ...view, tracks: [book, cell] }, 0)
+  assert.deepEqual(drawn, ['BOOK', 'cel0']) // 背景として奥に
+
+  drawn.length = 0
+  composite(ctx, { ...view, tracks: [{ ...book, visible: false }, cell] }, 0)
+  assert.deepEqual(drawn, ['cel0']) // 非表示は描かない
+
+  drawn.length = 0
+  composite(ctx, { ...view, tracks: [book, cell] }, 4) // クリップの外
+  assert.deepEqual(drawn, ['BOOK'])
 })
 
 test('fitRect: contain / cover / fill / none', () => {
