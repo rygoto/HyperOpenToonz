@@ -1,11 +1,12 @@
 import { useRef } from 'react'
 import { BACKGROUND_ACCEPT } from '../engine/media.js'
+import Fold from './Fold.jsx'
 
 /**
  * 背景 / BOOK の読み込みとステージ設定。
  * 読み込んだ絵はレイヤー(トラック)になるので、重なり順はトラック側で入れ替える。
  */
-export default function BackgroundPanel({ onAdd, stage, onStage }) {
+export default function BackgroundPanel({ onAdd, stage, onStage, simple }) {
   const backInput = useRef(null)
   const bookInput = useRef(null)
 
@@ -40,65 +41,69 @@ export default function BackgroundPanel({ onAdd, stage, onStage }) {
       <button className="wide" onClick={() => bookInput.current.click()}>
         ＋ BOOK を読み込む（一番手前へ）
       </button>
-      <p className="hint">
-        png / jpeg / mp4 / webm など。読み込んだ絵はレイヤーになるので、あとからトラックの
-        「▲ 奥へ / ▼ 手前へ」でセルの上にも下にも置けます。透過PNGは「ファイル」アプリ経由が確実です。
-      </p>
+      {!simple && (
+        <p className="hint">
+          png / jpeg / mp4 / webm など。読み込んだ絵はレイヤーになるので、あとからトラックの
+          「▲ 奥へ / ▼ 手前へ」でセルの上にも下にも置けます。透過PNGは「ファイル」アプリ経由が確実です。
+        </p>
+      )}
 
-      <h2 className="panel__title">ステージ</h2>
+      {!simple && (
+        <Fold id="stage" title="ステージ" meta={`${stage.width}×${stage.height}`} defaultOpen={false}>
+          <div className="row">
+            <label className="field">
+              幅
+              <input
+                type="number"
+                min="16"
+                max="8192"
+                value={stage.width}
+                disabled={stage.autoSize}
+                onChange={(e) => onStage({ width: Math.max(16, Number(e.target.value) || 16) })}
+              />
+            </label>
+            <label className="field">
+              高さ
+              <input
+                type="number"
+                min="16"
+                max="8192"
+                value={stage.height}
+                disabled={stage.autoSize}
+                onChange={(e) => onStage({ height: Math.max(16, Number(e.target.value) || 16) })}
+              />
+            </label>
+          </div>
 
-      <div className="row">
-        <label className="field">
-          幅
-          <input
-            type="number"
-            min="16"
-            max="8192"
-            value={stage.width}
-            disabled={stage.autoSize}
-            onChange={(e) => onStage({ width: Math.max(16, Number(e.target.value) || 16) })}
-          />
-        </label>
-        <label className="field">
-          高さ
-          <input
-            type="number"
-            min="16"
-            max="8192"
-            value={stage.height}
-            disabled={stage.autoSize}
-            onChange={(e) => onStage({ height: Math.max(16, Number(e.target.value) || 16) })}
-          />
-        </label>
-      </div>
+          <label className="chk">
+            <input
+              type="checkbox"
+              checked={stage.autoSize}
+              onChange={(e) => onStage({ autoSize: e.target.checked })}
+            />
+            素材に合わせる
+          </label>
 
-      <label className="chk">
-        <input
-          type="checkbox"
-          checked={stage.autoSize}
-          onChange={(e) => onStage({ autoSize: e.target.checked })}
-        />
-        素材に合わせる
-      </label>
+          <label className="chk">
+            <input
+              type="checkbox"
+              checked={stage.checker}
+              onChange={(e) => onStage({ checker: e.target.checked })}
+            />
+            背景が無いとき市松模様
+          </label>
 
-      <label className="chk">
-        <input
-          type="checkbox"
-          checked={stage.checker}
-          onChange={(e) => onStage({ checker: e.target.checked })}
-        />
-        背景が無いとき市松模様
-      </label>
-
-      {!stage.checker && (
-        <label className="field wide">
-          下地の色
-          <input
-            type="color"
-            value={stage.bgColor}
-            onChange={(e) => onStage({ bgColor: e.target.value })}
-          />
-        </label>
+          {!stage.checker && (
+            <label className="field wide">
+              下地の色
+              <input
+                type="color"
+                value={stage.bgColor}
+                onChange={(e) => onStage({ bgColor: e.target.value })}
+              />
+            </label>
+          )}
+        </Fold>
       )}
     </section>
   )

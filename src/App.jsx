@@ -41,6 +41,15 @@ const MIN_TIMELINE_H = 96
 const MIN_STAGE_H = 140
 const SPLIT_KEY = 'piyopiyo.timelineHeight'
 const NAME_KEY = 'piyopiyo.exportName'
+const SIMPLE_KEY = 'piyopiyo.simple'
+
+function loadSimple() {
+  try {
+    return window.localStorage.getItem(SIMPLE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 function loadSplit() {
   try {
@@ -88,6 +97,9 @@ export default function App() {
   // ステージ上での直接操作(移動・拡縮)
   const [grab, setGrab] = useState(false)
   const [grabTrackId, setGrabTrackId] = useState(null)
+
+  // シンプル表示: 数値や細かい調整を隠して、作業に要るものだけ出す
+  const [simple, setSimple] = useState(loadSimple)
 
   // 書き出しの設定
   const [exportOpen, setExportOpen] = useState(false)
@@ -755,6 +767,18 @@ export default function App() {
     setExportOpen(true)
   }, [clock, say])
 
+  const toggleSimple = useCallback(() => {
+    setSimple((v) => {
+      const next = !v
+      try {
+        window.localStorage.setItem(SIMPLE_KEY, next ? '1' : '0')
+      } catch {
+        /* 覚えられなくても切り替えはできる */
+      }
+      return next
+    })
+  }, [])
+
   const changeExportName = useCallback((name) => {
     setExportName(name)
     try {
@@ -888,6 +912,13 @@ export default function App() {
               {assetsOpen ? '閉じる' : '素材'}
             </button>
           )}
+          <button
+            className={simple ? 'primary' : ''}
+            title={simple ? '細かい調整も出す' : '作業に要るものだけにする'}
+            onClick={toggleSimple}
+          >
+            {simple ? 'くわしく' : 'シンプル'}
+          </button>
           <button className="primary" disabled={!!busy || frozen} onClick={openExport}>
             MP4書き出し
           </button>
@@ -912,10 +943,12 @@ export default function App() {
             onAdd={addBackgroundTrack}
             stage={stage}
             onStage={(patch) => setStage((s) => ({ ...s, ...patch }))}
+            simple={simple}
           />
           <TrackPanel
             tracks={tracks}
             selection={selection}
+            simple={simple}
             onAddCells={addCellTrack}
             onAddAudio={addAudioTracks}
             onPatch={patchTrack}
@@ -970,6 +1003,7 @@ export default function App() {
             onDuplicate={duplicateSelection}
             onUndo={undo}
             onRedo={redo}
+            simple={simple}
           />
           <div
             className="splitter"
