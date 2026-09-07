@@ -1,4 +1,5 @@
 import { activeClip, cellFrameIndex } from './timeline.js'
+import { hasFx, pruneFxCache, renderFx } from './fx.js'
 
 /** src を dst の矩形にどう収めるか */
 export function fitRect(sw, sh, dw, dh, mode) {
@@ -13,8 +14,11 @@ export function fitRect(sw, sh, dw, dh, mode) {
   return { x: (dw - w) / 2, y: (dh - h) / 2, w, h }
 }
 
-/** トラックの fit / 拡大率 / オフセットを当てはめた描画先 */
-function placeRect(track, sw, sh, cw, ch) {
+/**
+ * トラックの fit / 拡大率 / オフセットを当てはめた描画先。
+ * 拡大は矩形の中心を軸にするので、拡大率を変えても中心は動かない。
+ */
+export function placeRect(track, sw, sh, cw, ch) {
   const base = fitRect(sw, sh, cw, ch, track.fit)
   const w = base.w * track.scale
   const h = base.h * track.scale
@@ -24,6 +28,18 @@ function placeRect(track, sw, sh, cw, ch) {
     w,
     h,
   }
+}
+
+/** ステージ上のこの位置に乗っているレイヤーの描画先(手前から探す) */
+export function trackRectAt(tracks, cw, ch, px, py) {
+  for (let i = tracks.length - 1; i >= 0; i--) {
+    const t = tracks[i]
+    if (!t.visible || !(t.width > 0)) continue
+    if (t.type !== 'cell' && t.type !== 'bg') continue
+    const r = placeRect(t, t.width, t.height, cw, ch)
+    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return { track: t, rect: r }
+  }
+  return null
 }
 
 /**
@@ -55,6 +71,13 @@ export function composite(ctx, view, time) {
 
   ctx.globalAlpha = 1
   ctx.globalCompositeOperation = 'source-over'
+  pruneFxCache(new Set(tracks.map((t) => t.id)))
+}
+
+/** 撮影処理を焼いた画を返す。何も設定されていなければ素材そのまま */
+function shot(track, source, frameKey) {
+  if (!hasFx(track.fx)) return source
+  return renderFx(source, track.width, track.height, track.fx, track.id, frameKey)
 }
 
 function drawBg(ctx, track, cw, ch, time) {
@@ -62,10 +85,12 @@ function drawBg(ctx, track, cw, ch, time) {
   if (track.kind === 'video' && track.el.readyState < 2) return
   if (!activeClip(track, time)) return
 
+  // 動画は毎フレーム絵が変わるのでキャッシュしない
+  const src = shot(track, track.el, track.kind === 'video' ? null : 'still')
   const r = placeRect(track, track.width, track.height, cw, ch)
   ctx.globalAlpha = track.opacity
   ctx.globalCompositeOperation = track.blend
-  ctx.drawImage(track.el, r.x, r.y, r.w, r.h)
+  ctx.drawImage(src, r.x, r.y, r.w, r.h)
 }
 
 function drawCell(ctx, track, cw, ch, time) {
@@ -75,10 +100,11 @@ function drawCell(ctx, track, cw, ch, time) {
     const frame = track.frames[idx]
     if (!frame) continue
 
+    const src = shot(track, frame, idx)
     const r = placeRect(track, track.width, track.height, cw, ch)
     ctx.globalAlpha = track.opacity
     ctx.globalCompositeOperation = track.blend
-    ctx.drawImage(frame, r.x, r.y, r.w, r.h)
+    ctx.drawImage(src, r.x, r.y, r.w, r.h)
   }
 }
 

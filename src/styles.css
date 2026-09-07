@@ -821,6 +821,243 @@ input[type="color"] {
   display: none;
 }
 
+/* ---------- stage: 直接操作 ---------- */
+
+.stage__tools {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(20, 20, 26, 0.82);
+  border: 1px solid var(--line);
+  max-width: calc(100% - 16px);
+  flex-wrap: wrap;
+}
+
+.stage__tools button {
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.stage__tools select {
+  width: auto;
+  max-width: 140px;
+  min-height: 28px;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+
+.stage__tools span {
+  font-size: 11px;
+}
+
+/* 直接操作のあいだキャンバスに被せる当たり判定 */
+.stage__grab {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  touch-action: none;
+  cursor: grab;
+}
+
+.stage__box {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.stage__handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px;
+  border-radius: 3px;
+  background: var(--accent);
+  border: 1px solid #1a1a20;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.stage__handle--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.stage__handle--ne {
+  top: 0;
+  left: 100%;
+  cursor: nesw-resize;
+}
+
+.stage__handle--sw {
+  top: 100%;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.stage__handle--se {
+  top: 100%;
+  left: 100%;
+  cursor: nwse-resize;
+}
+
+.stage__grabhint {
+  position: absolute;
+  bottom: 10px;
+  z-index: 6;
+  margin: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(20, 20, 26, 0.82);
+  border: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 11px;
+  pointer-events: none;
+  max-width: calc(100% - 16px);
+}
+
+.layer.is-grabbed {
+  border-color: var(--accent);
+}
+
+/* ---------- 撮影処理 ---------- */
+
+.fx {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #1b1b21;
+}
+
+.fx__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+
+.fx__head::-webkit-details-marker {
+  display: none;
+}
+
+.fx__head::before {
+  content: "🎬";
+}
+
+.fx__badge {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.fx__badge.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.fx__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 8px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.fx-part {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fx-part.is-on {
+  border-color: #4a4a58;
+  background: #202027;
+}
+
+.fx-part__head strong {
+  font-weight: 600;
+  font-size: 11.5px;
+}
+
+.fx-part.is-on .fx-part__head strong {
+  color: var(--accent);
+}
+
+.fx-part__body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.fx-part__body .row {
+  align-items: flex-end;
+}
+
+.curve {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.curve__tabs button {
+  padding: 3px 0;
+}
+
+.curve__canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  touch-action: none;
+  cursor: crosshair;
+  display: block;
+}
+
+/* ---------- 書き出しダイアログ ---------- */
+
+.overlay__box--wide {
+  min-width: min(400px, 90vw);
+  max-width: min(440px, 92vw);
+  text-align: left;
+}
+
+.dialog__title {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.dialog__row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.dialog__meta {
+  margin-bottom: 10px;
+}
+
+.dialog__error {
+  color: var(--danger);
+}
+
 /* ---------- touch / iPad ---------- */
 
 @media (pointer: coarse) {
@@ -869,6 +1106,23 @@ input[type="color"] {
 
   .stage {
     padding: 8px;
+  }
+
+  /* 指でつまめる大きさにする */
+  .stage__handle {
+    width: 26px;
+    height: 26px;
+    margin: -13px;
+  }
+
+  .stage__tools button {
+    min-height: 38px;
+    font-size: 12px;
+  }
+
+  .stage__tools select {
+    min-height: 38px;
+    font-size: 14px;
   }
 }
 

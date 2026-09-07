@@ -18,8 +18,18 @@ import Transport from './components/Transport.jsx'
 import Timeline from './components/Timeline.jsx'
 import BackgroundPanel from './components/BackgroundPanel.jsx'
 import TrackPanel from './components/TrackPanel.jsx'
+import ExportDialog from './components/ExportDialog.jsx'
 import { exportComposedVideo } from './engine/exportVideo.js'
-import { fileStamp, saveBlob } from './engine/saveFile.js'
+import { defaultFx } from './engine/fx.js'
+import {
+  fileStamp,
+  forgetExportDirectory,
+  loadExportDirectory,
+  pickExportDirectory,
+  reauthorizeDirectory,
+  saveBlob,
+  withExtension,
+} from './engine/saveFile.js'
 import { useMatchMedia } from './hooks/useMatchMedia.js'
 
 const DEFAULT_CELL_FPS = 8
@@ -30,6 +40,7 @@ const HISTORY_LIMIT = 100
 const MIN_TIMELINE_H = 96
 const MIN_STAGE_H = 140
 const SPLIT_KEY = 'piyopiyo.timelineHeight'
+const NAME_KEY = 'piyopiyo.exportName'
 
 function loadSplit() {
   try {
@@ -73,6 +84,16 @@ export default function App() {
   const [frozen, setFrozen] = useState(false)
   const [exportResult, setExportResult] = useState(null)
   const compact = useMatchMedia('(max-width: 960px)')
+
+  // ステージ上での直接操作(移動・拡縮)
+  const [grab, setGrab] = useState(false)
+  const [grabTrackId, setGrabTrackId] = useState(null)
+
+  // 書き出しの設定
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportName, setExportName] = useState('')
+  const [exportDir, setExportDir] = useState(null)
+  const [askWhere, setAskWhere] = useState(false)
 
   // タイムラインの高さ(null = CSS の既定値)
   const [tlHeight, setTlHeight] = useState(loadSplit)
@@ -288,6 +309,7 @@ export default function App() {
           x: 0,
           y: 0,
           blend: 'source-over',
+          fx: defaultFx(),
           visible: true,
           muted: false,
           clips: [],
@@ -330,6 +352,7 @@ export default function App() {
           y: 0,
           fit: 'contain',
           blend: 'source-over',
+          fx: defaultFx(),
           visible: true,
           clips: [],
         }
@@ -388,6 +411,15 @@ export default function App() {
   const patchTrack = useCallback(
     (id, patch) => commit((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t))),
     [commit],
+  )
+
+  /**
+   * ドラッグ中の更新。履歴は掴んだ瞬間に onBeginEdit で1回だけ積むので、
+   * ここでは積まずに現在の状態だけ書き換える。
+   */
+  const patchTrackLive = useCallback(
+    (id, patch) => applyTracks(tracksRef.current.map((t) => (t.id === id ? { ...t, ...patch } : t))),
+    [applyTracks],
   )
 
   const patchClip = useCallback(
@@ -692,6 +724,59 @@ export default function App() {
     [addAudioTracks, addBackgroundTrack, addCellTrack, say],
   )
 
+  // 覚えている保存先フォルダを起動時に拾う(許可が切れていても名前は出す)
+  useEffect(() => {
+    let alive = true
+    loadExportDirectory().then((d) => {
+      if (alive) setExportDir(d)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const openExport = useCallback(() => {
+    if (tracksRef.current.length === 0) {
+      say('書き出す素材がありません', 'error')
+      return
+    }
+    clock.pause()
+    setAssetsOpen(false)
+    setExportName((prev) => {
+      if (prev) return prev
+      let stored = ''
+      try {
+        stored = window.localStorage.getItem(NAME_KEY) || ''
+      } catch {
+        /* noop */
+      }
+      return stored || `PiyopiyoToonz-${fileStamp()}`
+    })
+    setExportOpen(true)
+  }, [clock, say])
+
+  const changeExportName = useCallback((name) => {
+    setExportName(name)
+    try {
+      window.localStorage.setItem(NAME_KEY, name)
+    } catch {
+      /* noop */
+    }
+  }, [])
+
+  const chooseExportDir = useCallback(async () => {
+    const picked = await pickExportDirectory()
+    if (picked) {
+      setExportDir(picked)
+      setAskWhere(false)
+    }
+  }, [])
+
+  const dropExportDir = useCallback(async () => {
+    await forgetExportDirectory()
+    setExportDir(null)
+  }, [])
+
   const startExport = useCallback(async () => {
     const duration = projectDurationSec(tracksRef.current)
     if (tracksRef.current.length === 0) {
@@ -699,6 +784,7 @@ export default function App() {
       return
     }
     const dur = duration > 0 ? duration : FALLBACK_DURATION
+    setExportOpen(false)
     clock.pause()
     setAssetsOpen(false)
     const ac = new AbortController()
@@ -732,7 +818,7 @@ export default function App() {
           }),
       })
       const ext = (blob.type || '').includes('webm') ? 'webm' : 'mp4'
-      setExportResult({ blob, filename: `PiyopiyoToonz-${fileStamp()}.${ext}` })
+      setExportResult({ blob, filename: withExtension(exportName || `PiyopiyoToonz-${fileStamp()}`, ext) })
       say('書き出しが完了しました。保存してください')
     } catch (e) {
       if (e?.name === 'AbortError') say('書き出しをキャンセルしました')
@@ -741,20 +827,35 @@ export default function App() {
       setBusy(null)
       setFrozen(false)
     }
-  }, [clock, muted, projectFps, say, stage, volume])
+  }, [clock, exportName, muted, projectFps, say, stage, volume])
 
   const saveExport = useCallback(async () => {
     if (!exportResult) return
     try {
-      const result = await saveBlob(exportResult.blob, exportResult.filename)
-      if (result !== 'cancelled') {
-        say('保存しました')
-        setExportResult(null)
+      let dir = exportDir
+      // 前に選んだフォルダは、保存を押したこの操作の中で許可を取り直す
+      if (dir && !dir.granted) {
+        const ok = await reauthorizeDirectory(dir.handle)
+        if (ok) {
+          dir = { ...dir, granted: true }
+          setExportDir(dir)
+        } else {
+          dir = null
+          say('フォルダへの書き込みが許可されなかったので、ダウンロードにします')
+        }
       }
+      const result = await saveBlob(exportResult.blob, exportResult.filename, {
+        dir: dir?.handle ?? null,
+        askWhere,
+      })
+      if (result.how === 'cancelled') return
+      setExportResult(null)
+      if (result.how === 'folder') say(`📁 ${result.folder} に ${result.name} を保存しました`)
+      else say(`${result.name} を保存しました`)
     } catch (e) {
       say(e?.message || '保存できませんでした', 'error')
     }
-  }, [exportResult, say])
+  }, [askWhere, exportDir, exportResult, say])
 
   const view = useMemo(
     () => ({
@@ -787,7 +888,7 @@ export default function App() {
               {assetsOpen ? '閉じる' : '素材'}
             </button>
           )}
-          <button className="primary" disabled={!!busy || frozen} onClick={startExport}>
+          <button className="primary" disabled={!!busy || frozen} onClick={openExport}>
             MP4書き出し
           </button>
         </div>
@@ -818,10 +919,18 @@ export default function App() {
             onAddCells={addCellTrack}
             onAddAudio={addAudioTracks}
             onPatch={patchTrack}
+            onPatchLive={patchTrackLive}
+            onBeginEdit={pushHistory}
             onClipPatch={patchClip}
             onRemove={removeTrack}
             onMove={moveTrack}
             onRepeatFill={repeatFill}
+            grabTrackId={grab ? grabTrackId : null}
+            onGrab={(id) => {
+              setGrabTrackId(id)
+              setGrab(true)
+              setAssetsOpen(false)
+            }}
           />
         </aside>
 
@@ -830,7 +939,18 @@ export default function App() {
           ref={viewerRef}
           style={tlHeight == null ? undefined : { '--tl-h': tlHeight + 'px' }}
         >
-          <Stage clock={clock} audio={audio} view={view} onDropFiles={onDropFiles} />
+          <Stage
+            clock={clock}
+            audio={audio}
+            view={view}
+            onDropFiles={onDropFiles}
+            grab={grab}
+            onGrab={setGrab}
+            grabTrackId={grabTrackId}
+            onGrabTrack={setGrabTrackId}
+            onBeginEdit={pushHistory}
+            onPatchTrack={patchTrackLive}
+          />
           <Transport
             clock={clock}
             projectFps={projectFps}
@@ -883,6 +1003,28 @@ export default function App() {
         </main>
       </div>
 
+      {exportOpen && !busy && (
+        <ExportDialog
+          filename={exportName}
+          onFilename={changeExportName}
+          dir={exportDir}
+          onPickDir={chooseExportDir}
+          onForgetDir={dropExportDir}
+          askWhere={askWhere}
+          onAskWhere={setAskWhere}
+          meta={{
+            width: stage.width,
+            height: stage.height,
+            fps: projectFps,
+            duration: Math.max(projectDurationSec(tracks), 0) || FALLBACK_DURATION,
+            muted,
+            ext: 'mp4',
+          }}
+          onStart={startExport}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
+
       {busy && (
         <div className="overlay">
           <div className="overlay__box">
@@ -909,9 +1051,10 @@ export default function App() {
           <div className="overlay__box">
             <p>書き出しが完了しました</p>
             <p className="hint">{exportResult.filename}</p>
+            {exportDir && <p className="hint">保存先: 📁 {exportDir.name}</p>}
             <div className="row">
               <button className="primary wide" onClick={saveExport}>
-                保存 / 共有
+                {exportDir ? 'フォルダに保存' : '保存 / 共有'}
               </button>
               <button className="wide" onClick={() => setExportResult(null)}>
                 閉じる

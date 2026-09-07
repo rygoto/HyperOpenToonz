@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { AUDIO_ACCEPT } from '../engine/media.js'
 import { clipLenSec, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
+import FxPanel from './FxPanel.jsx'
 
 const FPS_PRESETS = [4, 6, 8, 12, 15, 24, 30]
 
@@ -29,7 +30,7 @@ function NumberField({ label, value, onChange, step = 1, min, max, suffix }) {
 }
 
 /** 絵のレイヤー(セル / 背景)に共通の配置・合成 */
-function TransformBody({ track, onPatch }) {
+function TransformBody({ track, onPatch, onPatchLive, onBeginEdit, grabbed, onGrab }) {
   return (
     <>
       <label className="field wide">
@@ -40,9 +41,15 @@ function TransformBody({ track, onPatch }) {
           max="1"
           step="0.01"
           value={track.opacity}
-          onChange={(e) => onPatch({ opacity: Number(e.target.value) })}
+          onPointerDown={onBeginEdit}
+          onKeyDown={onBeginEdit}
+          onChange={(e) => onPatchLive({ opacity: Number(e.target.value) })}
         />
       </label>
+
+      <button className={'wide' + (grabbed ? ' primary' : '')} onClick={onGrab}>
+        {grabbed ? '✥ ステージで操作中' : '✥ ステージで直接動かす'}
+      </button>
 
       <div className="row">
         <NumberField
@@ -81,7 +88,7 @@ function TransformBody({ track, onPatch }) {
   )
 }
 
-function CellBody({ track, onPatch, onRepeatFill }) {
+function CellBody({ track, onPatch, onRepeatFill, ...rest }) {
   return (
     <>
       <div className="row">
@@ -106,17 +113,17 @@ function CellBody({ track, onPatch, onRepeatFill }) {
         </div>
       </div>
 
-      <TransformBody track={track} onPatch={onPatch} />
+      <TransformBody track={track} onPatch={onPatch} {...rest} />
 
       <button onClick={onRepeatFill}>最後のクリップで尺いっぱいまで繰り返す</button>
     </>
   )
 }
 
-function BgBody({ track, onPatch, onRepeatFill }) {
+function BgBody({ track, onPatch, onRepeatFill, ...rest }) {
   return (
     <>
-      <TransformBody track={track} onPatch={onPatch} />
+      <TransformBody track={track} onPatch={onPatch} {...rest} />
 
       {track.kind === 'video' && (
         <label className="chk">
@@ -163,13 +170,28 @@ function trackMeta(track) {
   return '音声'
 }
 
-function TrackRow({ track, index, total, selection, onPatch, onClipPatch, onRemove, onMove, onRepeatFill }) {
+function TrackRow({
+  track,
+  index,
+  total,
+  selection,
+  onPatch,
+  onPatchLive,
+  onBeginEdit,
+  onClipPatch,
+  onRemove,
+  onMove,
+  onRepeatFill,
+  grabbed,
+  onGrab,
+}) {
   const selected = track.clips.filter((c) => selection.includes(c.id))
   const only = selected.length === 1 ? selected[0] : null
   const visual = isVisual(track)
+  const shared = { onPatchLive, onBeginEdit, grabbed, onGrab }
 
   return (
-    <details className="layer" open={index === 0}>
+    <details className={'layer' + (grabbed ? ' is-grabbed' : '')} open={index === 0}>
       <summary className="layer__head">
         <button
           className={'layer__eye' + ((visual ? track.visible : !track.muted) ? '' : ' is-off')}
@@ -188,12 +210,20 @@ function TrackRow({ track, index, total, selection, onPatch, onClipPatch, onRemo
 
       <div className="layer__body">
         {track.type === 'cell' && (
-          <CellBody track={track} onPatch={onPatch} onRepeatFill={onRepeatFill} />
+          <CellBody track={track} onPatch={onPatch} onRepeatFill={onRepeatFill} {...shared} />
         )}
         {track.type === 'bg' && (
-          <BgBody track={track} onPatch={onPatch} onRepeatFill={onRepeatFill} />
+          <BgBody track={track} onPatch={onPatch} onRepeatFill={onRepeatFill} {...shared} />
         )}
         {track.type === 'audio' && <AudioBody track={track} onPatch={onPatch} />}
+
+        {visual && (
+          <FxPanel
+            track={track}
+            onBeginEdit={onBeginEdit}
+            onFx={(fx) => onPatchLive({ fx })}
+          />
+        )}
 
         {only && (
           <div className="clip-inspector">
@@ -243,10 +273,14 @@ export default function TrackPanel({
   onAddCells,
   onAddAudio,
   onPatch,
+  onPatchLive,
+  onBeginEdit,
   onClipPatch,
   onRemove,
   onMove,
   onRepeatFill,
+  grabTrackId,
+  onGrab,
 }) {
   const cellInput = useRef(null)
   const audioInput = useRef(null)
@@ -300,10 +334,14 @@ export default function TrackPanel({
               total={tracks.length}
               selection={selection}
               onPatch={(patch) => onPatch(t.id, patch)}
+              onPatchLive={(patch) => onPatchLive(t.id, patch)}
+              onBeginEdit={onBeginEdit}
               onClipPatch={onClipPatch}
               onRemove={() => onRemove(t.id)}
               onMove={(dir) => onMove(t.id, dir)}
               onRepeatFill={() => onRepeatFill(t.id)}
+              grabbed={grabTrackId === t.id}
+              onGrab={() => onGrab(t.id)}
             />
           ))}
         </div>
