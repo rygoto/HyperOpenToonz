@@ -26,6 +26,7 @@ export default function Transport({
   onDuplicate,
   onUndo,
   onRedo,
+  simple,
 }) {
   const st = useSyncExternalStore(clock.subscribe, clock.getSnapshot)
   const hasSel = selectionCount > 0
@@ -73,26 +74,32 @@ export default function Transport({
         ループ
       </label>
 
-      <label className="field">
-        速度
-        <select value={st.rate} onChange={(e) => clock.setRate(Number(e.target.value))}>
-          {[0.25, 0.5, 1, 1.5, 2].map((r) => (
-            <option key={r} value={r}>{r}x</option>
-          ))}
-        </select>
-      </label>
+      {!simple && (
+        <>
+          <label className="field">
+            速度
+            <select value={st.rate} onChange={(e) => clock.setRate(Number(e.target.value))}>
+              {[0.25, 0.5, 1, 1.5, 2].map((r) => (
+                <option key={r} value={r}>
+                  {r}x
+                </option>
+              ))}
+            </select>
+          </label>
 
-      <label className="field">
-        プロジェクトfps
-        <input
-          type="number"
-          min="1"
-          max="120"
-          step="1"
-          value={projectFps}
-          onChange={(e) => onProjectFps(Math.max(1, Number(e.target.value) || 1))}
-        />
-      </label>
+          <label className="field">
+            プロジェクトfps
+            <input
+              type="number"
+              min="1"
+              max="120"
+              step="1"
+              value={projectFps}
+              onChange={(e) => onProjectFps(Math.max(1, Number(e.target.value) || 1))}
+            />
+          </label>
+        </>
+      )}
 
       <div className="transport__audio">
         <button
