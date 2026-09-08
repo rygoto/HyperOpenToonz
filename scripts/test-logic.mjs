@@ -17,6 +17,14 @@ import {
   renderFx,
 } from '../src/engine/fx.js'
 import { sanitizeFilename, withExtension } from '../src/engine/saveFile.js'
+import {
+  assetKey,
+  foundCount,
+  parseScene,
+  sceneAssetNames,
+  sceneToText,
+  serializeScene,
+} from '../src/engine/scene.js'
 import { createClock } from '../src/engine/clock.js'
 import {
   activeClip,
@@ -450,4 +458,93 @@ test('拡張子は重ねない', () => {
   assert.equal(withExtension('cutA.mp4', 'mp4'), 'cutA.mp4')
   assert.equal(withExtension('cutA.MP4', 'mp4'), 'cutA.MP4')
   assert.equal(withExtension('cutA.mp4', 'webm'), 'cutA.mp4.webm')
+})
+
+/* ---------------- シーンの保存と読み込み ---------------- */
+
+const sampleScene = () => {
+  const fx = defaultFx()
+  const bg = bgTrack({
+    name: 'bg.png',
+    fileName: 'bg.png',
+    clips: [{ id: 'c1', start: 0, in: 0, len: 3 }],
+  })
+  const cell = cellTrack({
+    name: 'cutA',
+    files: ['cutA_0001.png', 'cutA_0002.png'],
+    frames: new Array(2),
+    x: 12,
+    y: -8,
+    scale: 1.5,
+    fx: { ...fx, grade: { ...fx.grade, on: true, color: '#ff8a3d', amount: 0.3 } },
+    clips: [{ id: 'c2', start: 1, in: 0, len: 2 }],
+  })
+  const se = audioTrack({ name: 'tone', fileName: 'tone.wav', clips: [{ id: 'c3', start: 0, in: 0, len: 4 }] })
+  return serializeScene({
+    tracks: [bg, cell, se],
+    stage: { width: 640, height: 360, autoSize: false, bgColor: '#101014', checker: false },
+    projectFps: 24,
+    muted: false,
+    volume: 0.8,
+    name: 'cutA',
+  })
+}
+
+test('シーン: 書き出して読み直すと、重なり順も撮影処理もそのまま', () => {
+  const scene = parseScene(sceneToText(sampleScene()))
+
+  assert.deepEqual(scene.tracks.map((t) => t.type), ['bg', 'cell', 'audio'])
+  assert.deepEqual(scene.tracks.map((t) => t.files), [
+    ['bg.png'],
+    ['cutA_0001.png', 'cutA_0002.png'],
+    ['tone.wav'],
+  ])
+
+  const cell = scene.tracks[1]
+  assert.equal(cell.x, 12)
+  assert.equal(cell.y, -8)
+  assert.equal(cell.scale, 1.5)
+  assert.equal(cell.fps, 8)
+  assert.equal(cell.fx.grade.on, true)
+  assert.equal(cell.fx.grade.color, '#ff8a3d')
+  assert.deepEqual(cell.clips, [{ start: 1, in: 0, len: 2 }])
+
+  assert.deepEqual(scene.stage, {
+    width: 640,
+    height: 360,
+    autoSize: false,
+    bgColor: '#101014',
+    checker: false,
+  })
+  assert.equal(scene.project.fps, 24)
+  assert.equal(scene.project.volume, 0.8)
+  assert.equal(scene.project.name, 'cutA')
+})
+
+test('シーン: 他のアプリの JSON や壊れた JSON は理由を添えて断る', () => {
+  assert.throws(() => parseScene('{'), /JSON/)
+  assert.throws(() => parseScene('{"app":"Other","kind":"scene"}'), /PiyopiyoToonz/)
+  assert.throws(
+    () => parseScene(JSON.stringify({ app: 'PiyopiyoToonz', kind: 'scene', version: 99, tracks: [] })),
+    /新しい版/,
+  )
+  assert.throws(
+    () => parseScene(JSON.stringify({ app: 'PiyopiyoToonz', kind: 'scene', version: 1, tracks: [] })),
+    /レイヤー/,
+  )
+})
+
+test('シーン: 素材はファイル名で結び直す(大文字小文字とフォルダは無視)', () => {
+  const scene = parseScene(sceneToText(sampleScene()))
+  assert.deepEqual(sceneAssetNames(scene), ['bg.png', 'cutA_0001.png', 'cutA_0002.png', 'tone.wav'])
+
+  assert.equal(assetKey('C:\\work\\CutA_0001.PNG'), 'cuta_0001.png')
+
+  const pool = new Map([
+    [assetKey('BG.PNG'), 'file'],
+    [assetKey('cuts/cutA_0001.png'), 'file'],
+  ])
+  assert.equal(foundCount(scene.tracks[0], pool), 1)
+  assert.equal(foundCount(scene.tracks[1], pool), 1) // 2コマ中1コマだけ見つかった
+  assert.equal(foundCount(scene.tracks[2], pool), 0)
 })

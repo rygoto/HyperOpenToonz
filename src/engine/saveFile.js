@@ -156,11 +156,12 @@ async function writeToDirectory(dir, blob, filename) {
 
 /**
  * 書き出した Blob を保存する。
- *   dir      … 覚えている保存先フォルダ。あればそこへ直接書く
- *   askWhere … 保存ダイアログで毎回場所を選ぶ
+ *   dir         … 覚えている保存先フォルダ。あればそこへ直接書く
+ *   askWhere    … 保存ダイアログで毎回場所を選ぶ
+ *   description … 保存ダイアログに出す種別の名前
  * iPad は共有シート、それ以外はダウンロード。どれもユーザー操作の直後に呼ぶこと。
  */
-export async function saveBlob(blob, filename, { dir = null, askWhere = false } = {}) {
+export async function saveBlob(blob, filename, { dir = null, askWhere = false, description = '動画' } = {}) {
   const name = sanitizeFilename(filename, 'PiyopiyoToonz.mp4')
 
   if (dir) {
@@ -180,7 +181,7 @@ export async function saveBlob(blob, filename, { dir = null, askWhere = false } 
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: name,
-        types: [{ description: '動画', accept: { [blob.type || 'video/mp4']: [ext] } }],
+        types: [{ description, accept: { [blob.type || 'video/mp4']: [ext] } }],
       })
       const stream = await handle.createWritable()
       await stream.write(blob)

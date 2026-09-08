@@ -19,8 +19,11 @@ import Timeline from './components/Timeline.jsx'
 import BackgroundPanel from './components/BackgroundPanel.jsx'
 import TrackPanel from './components/TrackPanel.jsx'
 import ExportDialog from './components/ExportDialog.jsx'
+import ScenePanel from './components/ScenePanel.jsx'
+import SceneDialog from './components/SceneDialog.jsx'
 import { exportComposedVideo } from './engine/exportVideo.js'
-import { defaultFx } from './engine/fx.js'
+import { clearFxCache, defaultFx } from './engine/fx.js'
+import { parseScene, restoreScene, sceneToText, serializeScene, SCENE_EXT } from './engine/scene.js'
 import {
   fileStamp,
   forgetExportDirectory,
@@ -100,6 +103,10 @@ export default function App() {
 
   // シンプル表示: 数値や細かい調整を隠して、作業に要るものだけ出す
   const [simple, setSimple] = useState(loadSimple)
+
+  // 読み込んだシーン JSON(素材を結び直すのを待っている状態)と、一緒に渡された素材
+  const [sceneDoc, setSceneDoc] = useState(null)
+  const [sceneFiles, setSceneFiles] = useState([])
 
   // 書き出しの設定
   const [exportOpen, setExportOpen] = useState(false)
@@ -310,6 +317,7 @@ export default function App() {
           type: 'bg',
           kind: src.kind,
           name: src.name,
+          fileName: file.name,
           el: src.el,
           url: src.url,
           width: src.width,
@@ -354,6 +362,7 @@ export default function App() {
           id: nextId('track'),
           type: 'cell',
           name: nameFromFiles(images),
+          files: seq.names,
           frames: seq.frames,
           width: seq.width,
           height: seq.height,
@@ -397,6 +406,7 @@ export default function App() {
             id: nextId('track'),
             type: 'audio',
             name: file.name.replace(/\.[^.]+$/, ''),
+            fileName: file.name,
             buffer: src.buffer,
             peaks: src.peaks,
             duration: src.duration,
@@ -708,9 +718,39 @@ export default function App() {
     undo,
   ])
 
+  // ---------- シーンを開く ----------
+  /**
+   * JSON を開く。ここではまだ何も差し替えず、素材を結び直す画面を出すだけ。
+   * 一緒に落ちてきた素材(フォルダごとのドロップなど)は最初から結んでおく。
+   */
+  const openScene = useCallback(
+    async (file, withFiles = []) => {
+      try {
+        const doc = parseScene(await file.text())
+        setSceneFiles(withFiles)
+        setSceneDoc(doc)
+        clock.pause()
+        setExportOpen(false)
+        setAssetsOpen(false)
+      } catch (e) {
+        say(e?.message || 'シーンを読み込めませんでした', 'error')
+      }
+    },
+    [clock, say],
+  )
+
   // ---------- ドラッグ＆ドロップ ----------
   const onDropFiles = useCallback(
     (files) => {
+      // シーン JSON は素材ではなく、読み込み画面へ回す
+      const scene = files.find((f) => /\.json$/i.test(f.name) || f.type === 'application/json')
+      if (scene) {
+        openScene(
+          scene,
+          files.filter((f) => f !== scene),
+        )
+        return
+      }
       const audioFiles = files.filter((f) => kindOf(f) === 'audio')
       if (audioFiles.length) {
         addAudioTracks(audioFiles)
@@ -733,7 +773,7 @@ export default function App() {
       }
       addCellTrack(images)
     },
-    [addAudioTracks, addBackgroundTrack, addCellTrack, say],
+    [addAudioTracks, addBackgroundTrack, addCellTrack, openScene, say],
   )
 
   // 覚えている保存先フォルダを起動時に拾う(許可が切れていても名前は出す)
@@ -853,9 +893,12 @@ export default function App() {
     }
   }, [clock, exportName, muted, projectFps, say, stage, volume])
 
-  const saveExport = useCallback(async () => {
-    if (!exportResult) return
-    try {
+  /**
+   * 覚えているフォルダ(あれば許可を取り直して)へ書き出す。
+   * ボタンを押したその操作の中から呼ぶこと。
+   */
+  const saveOut = useCallback(
+    async (blob, filename, description) => {
       let dir = exportDir
       // 前に選んだフォルダは、保存を押したこの操作の中で許可を取り直す
       if (dir && !dir.granted) {
@@ -868,10 +911,15 @@ export default function App() {
           say('フォルダへの書き込みが許可されなかったので、ダウンロードにします')
         }
       }
-      const result = await saveBlob(exportResult.blob, exportResult.filename, {
-        dir: dir?.handle ?? null,
-        askWhere,
-      })
+      return saveBlob(blob, filename, { dir: dir?.handle ?? null, askWhere, description })
+    },
+    [askWhere, exportDir, say],
+  )
+
+  const saveExport = useCallback(async () => {
+    if (!exportResult) return
+    try {
+      const result = await saveOut(exportResult.blob, exportResult.filename, '動画')
       if (result.how === 'cancelled') return
       setExportResult(null)
       if (result.how === 'folder') say(`📁 ${result.folder} に ${result.name} を保存しました`)
@@ -879,7 +927,72 @@ export default function App() {
     } catch (e) {
       say(e?.message || '保存できませんでした', 'error')
     }
-  }, [askWhere, exportDir, exportResult, say])
+  }, [exportResult, saveOut, say])
+
+  // ---------- シーンの保存と復元 ----------
+  const saveScene = useCallback(async () => {
+    if (tracksRef.current.length === 0) {
+      say('保存するレイヤーがありません', 'error')
+      return
+    }
+    const doc = serializeScene({
+      tracks: tracksRef.current,
+      stage,
+      projectFps,
+      muted,
+      volume,
+      name: exportName,
+    })
+    const blob = new Blob([sceneToText(doc)], { type: 'application/json' })
+    const filename = withExtension(exportName || `PiyopiyoToonz-${fileStamp()}`, SCENE_EXT)
+    try {
+      const result = await saveOut(blob, filename, 'シーン')
+      if (result.how === 'cancelled') return
+      if (result.how === 'folder') say(`📁 ${result.folder} に ${result.name} を保存しました`)
+      else say(`${result.name} を保存しました`)
+    } catch (e) {
+      say(e?.message || 'シーンを保存できませんでした', 'error')
+    }
+  }, [exportName, muted, projectFps, saveOut, say, stage, volume])
+
+  /** 素材が揃ったので、今の内容をシーンで置き換える(元に戻すで戻れる) */
+  const restoreSceneNow = useCallback(
+    async (pool) => {
+      const doc = sceneDoc
+      if (!doc) return
+      setSceneDoc(null)
+      setBusy({ label: 'シーンを復元中…', done: 0, total: doc.tracks.length })
+      try {
+        const out = await restoreScene(doc, pool, {
+          onProgress: (done, total, label) => setBusy({ label, done, total }),
+        })
+        if (out.tracks.length === 0) {
+          say('素材が見つからず、復元できませんでした', 'error')
+          return
+        }
+        // 中身がそっくり入れ替わるので、焼き溜めた撮影処理はここで手放す
+        clearFxCache()
+        commit(out.tracks)
+        setSelection([])
+        setStage(out.stage)
+        setProjectFps(out.projectFps)
+        setMuted(out.muted)
+        setVolume(out.volume)
+        if (out.name) changeExportName(out.name)
+        clock.stop()
+        say(
+          out.skipped.length > 0
+            ? `シーンを復元しました(素材が見つからない${out.skipped.length}レイヤーは飛ばしました)`
+            : 'シーンを復元しました',
+        )
+      } catch (e) {
+        say(e?.message || 'シーンを復元できませんでした', 'error')
+      } finally {
+        setBusy(null)
+      }
+    },
+    [changeExportName, clock, commit, say, sceneDoc],
+  )
 
   const view = useMemo(
     () => ({
@@ -964,6 +1077,12 @@ export default function App() {
               setGrab(true)
               setAssetsOpen(false)
             }}
+          />
+          <ScenePanel
+            onSave={saveScene}
+            onOpen={openScene}
+            canSave={tracks.length > 0}
+            simple={simple}
           />
         </aside>
 
@@ -1056,6 +1175,15 @@ export default function App() {
           }}
           onStart={startExport}
           onClose={() => setExportOpen(false)}
+        />
+      )}
+
+      {sceneDoc && !busy && (
+        <SceneDialog
+          scene={sceneDoc}
+          initialFiles={sceneFiles}
+          onRestore={restoreSceneNow}
+          onClose={() => setSceneDoc(null)}
         />
       )}
 

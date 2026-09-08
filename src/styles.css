@@ -1069,6 +1069,68 @@ input[type="color"] {
   color: var(--danger);
 }
 
+/* ---------- シーンの読み込み(素材の結び直し) ---------- */
+
+.relink__drop {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.relink__drop.is-over {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+
+.relink__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 34vh;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.relink__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.relink__row.is-ok {
+  border-color: var(--accent);
+}
+
+.relink__row.is-missing {
+  opacity: 0.6;
+}
+
+.relink__mark {
+  width: 14px;
+  text-align: center;
+}
+
+.relink__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relink__count {
+  font-size: 11px;
+  color: var(--dim);
+}
+
 /* ---------- touch / iPad ---------- */
 
 @media (pointer: coarse) {
