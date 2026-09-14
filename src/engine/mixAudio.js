@@ -22,6 +22,8 @@ export async function decodeBgAudio(tracks) {
   const out = new Map()
   for (const track of tracks) {
     if (track.type !== 'bg' || track.kind !== 'video' || track.muted || !track.url) continue
+    // 読み込んだときに取り出してある音(音声付加側)は、それを使う
+    if (track.buffer) continue
     try {
       const ctx = audioContext()
       const bytes = await fetch(track.url).then((r) => r.arrayBuffer())
@@ -72,8 +74,8 @@ export async function mixProjectAudio({ tracks, bgBuffers, duration, volume = 1 
       continue
     }
     if (track.type === 'bg' && track.kind === 'video' && !track.muted) {
-      const buffer = bgBuffers?.get(track.id)
-      if (buffer && buffer.duration > 0) scheduleClips(ctx, master, track, buffer, 1, dur)
+      const buffer = track.buffer ?? bgBuffers?.get(track.id)
+      if (buffer && buffer.duration > 0) scheduleClips(ctx, master, track, buffer, track.gain ?? 1, dur)
     }
   }
 

@@ -30,9 +30,12 @@ function Wave({ track, clip, width }) {
   const ref = useRef(null)
   const w = Math.min(4000, Math.max(1, Math.round(width)))
 
+  // 動画から取り出した音は、動画の尺ではなく音の尺で波形を引く
+  const duration = track.buffer?.duration || track.duration
+
   useEffect(() => {
     const cv = ref.current
-    if (!cv || !track.peaks) return
+    if (!cv || !track.peaks || !(duration > 0)) return
     const h = 20
     cv.width = w
     cv.height = h
@@ -42,11 +45,12 @@ function Wave({ track, clip, width }) {
     const n = track.peaks.length
     for (let x = 0; x < w; x++) {
       const srcSec = clip.in + (x / w) * clip.len
-      const i = Math.min(n - 1, Math.max(0, Math.floor((srcSec / track.duration) * n)))
+      if (srcSec >= duration) break
+      const i = Math.min(n - 1, Math.max(0, Math.floor((srcSec / duration) * n)))
       const bar = Math.max(1, track.peaks[i] * h)
       ctx.fillRect(x, (h - bar) / 2, 1, bar)
     }
-  }, [track.peaks, track.duration, clip.in, clip.len, w])
+  }, [track.peaks, duration, clip.in, clip.len, w])
 
   return <canvas ref={ref} className="clip__wave" />
 }
@@ -62,7 +66,8 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
   return (
     <div
       className={
-        'clip clip--' + track.type + (selected ? ' is-selected' : '') +
+        'clip clip--' + track.type + (track.role ? ' clip--' + track.role : '') +
+        (selected ? ' is-selected' : '') +
         (isVisual(track) && !track.visible ? ' is-off' : '') +
         (track.type === 'audio' && track.muted ? ' is-off' : '')
       }
@@ -80,7 +85,7 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
         className="clip__trim clip__trim--l"
         onPointerDown={(e) => onGrab(e, track, clip, 'trim-start')}
       />
-      {track.type === 'audio' && width > 8 && <Wave track={track} clip={clip} width={width} />}
+      {(track.type === 'audio' || track.peaks) && width > 8 && <Wave track={track} clip={clip} width={width} />}
       <span className="clip__label">
         {isCellTrack
           ? `${Math.round(clip.in) + 1}〜${Math.round(clip.in + clip.len)}コマ`

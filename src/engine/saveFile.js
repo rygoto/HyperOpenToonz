@@ -48,7 +48,7 @@ function idb() {
   })
 }
 
-async function idbPut(key, value) {
+export async function idbPut(key, value) {
   const db = await idb()
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite')
@@ -59,7 +59,7 @@ async function idbPut(key, value) {
   db.close()
 }
 
-async function idbGet(key) {
+export async function idbGet(key) {
   const db = await idb()
   const value = await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly')
@@ -71,7 +71,7 @@ async function idbGet(key) {
   return value
 }
 
-async function idbDelete(key) {
+export async function idbDelete(key) {
   const db = await idb()
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite')

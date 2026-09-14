@@ -14,9 +14,19 @@ export function fitRect(sw, sh, dw, dh, mode) {
   return { x: (dw - w) / 2, y: (dh - h) / 2, w, h }
 }
 
+/** トラックの回転角(度)。持っていなければ 0 */
+export const trackDeg = (track) => {
+  const v = Number(track?.rotate)
+  return Number.isFinite(v) ? v : 0
+}
+
+/** 同じ角(ラジアン)。回転は矩形の中心を軸にする */
+export const trackAngle = (track) => (trackDeg(track) * Math.PI) / 180
+
 /**
  * トラックの fit / 拡大率 / オフセットを当てはめた描画先。
  * 拡大は矩形の中心を軸にするので、拡大率を変えても中心は動かない。
+ * 回転も同じ中心を軸にするので、この矩形は「回す前の枠」を表す。
  */
 export function placeRect(track, sw, sh, cw, ch) {
   const base = fitRect(sw, sh, cw, ch, track.fit)
@@ -30,6 +40,18 @@ export function placeRect(track, sw, sh, cw, ch) {
   }
 }
 
+/** 回転を戻した座標。当たり判定は「回す前の枠」で見る */
+export function unrotatePoint(rect, angle, px, py) {
+  if (!angle) return { x: px, y: py }
+  const cx = rect.x + rect.w / 2
+  const cy = rect.y + rect.h / 2
+  const dx = px - cx
+  const dy = py - cy
+  const cos = Math.cos(-angle)
+  const sin = Math.sin(-angle)
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }
+}
+
 /** ステージ上のこの位置に乗っているレイヤーの描画先(手前から探す) */
 export function trackRectAt(tracks, cw, ch, px, py) {
   for (let i = tracks.length - 1; i >= 0; i--) {
@@ -37,7 +59,8 @@ export function trackRectAt(tracks, cw, ch, px, py) {
     if (!t.visible || !(t.width > 0)) continue
     if (t.type !== 'cell' && t.type !== 'bg') continue
     const r = placeRect(t, t.width, t.height, cw, ch)
-    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return { track: t, rect: r }
+    const p = unrotatePoint(r, trackAngle(t), px, py)
+    if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return { track: t, rect: r }
   }
   return null
 }
@@ -80,6 +103,24 @@ function shot(track, source, frameKey) {
   return renderFx(source, track.width, track.height, track.fx, track.id, frameKey)
 }
 
+/** 置き場所・不透明度・合成モード・回転を当てはめて1枚描く */
+function drawPlaced(ctx, src, track, cw, ch) {
+  const r = placeRect(track, track.width, track.height, cw, ch)
+  const angle = trackAngle(track)
+  ctx.globalAlpha = track.opacity
+  ctx.globalCompositeOperation = track.blend
+
+  if (!angle) {
+    ctx.drawImage(src, r.x, r.y, r.w, r.h)
+    return
+  }
+  ctx.save()
+  ctx.translate(r.x + r.w / 2, r.y + r.h / 2)
+  ctx.rotate(angle)
+  ctx.drawImage(src, -r.w / 2, -r.h / 2, r.w, r.h)
+  ctx.restore()
+}
+
 function drawBg(ctx, track, cw, ch, time) {
   if (!(track.width > 0)) return
   if (track.kind === 'video' && track.el.readyState < 2) return
@@ -87,10 +128,7 @@ function drawBg(ctx, track, cw, ch, time) {
 
   // 動画は毎フレーム絵が変わるのでキャッシュしない
   const src = shot(track, track.el, track.kind === 'video' ? null : 'still')
-  const r = placeRect(track, track.width, track.height, cw, ch)
-  ctx.globalAlpha = track.opacity
-  ctx.globalCompositeOperation = track.blend
-  ctx.drawImage(src, r.x, r.y, r.w, r.h)
+  drawPlaced(ctx, src, track, cw, ch)
 }
 
 function drawCell(ctx, track, cw, ch, time) {
@@ -100,11 +138,7 @@ function drawCell(ctx, track, cw, ch, time) {
     const frame = track.frames[idx]
     if (!frame) continue
 
-    const src = shot(track, frame, idx)
-    const r = placeRect(track, track.width, track.height, cw, ch)
-    ctx.globalAlpha = track.opacity
-    ctx.globalCompositeOperation = track.blend
-    ctx.drawImage(src, r.x, r.y, r.w, r.h)
+    drawPlaced(ctx, shot(track, frame, idx), track, cw, ch)
   }
 }
 
