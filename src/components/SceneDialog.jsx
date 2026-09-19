@@ -1,9 +1,16 @@
-import { useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { filesFromDataTransfer } from '../engine/media.js'
-import { assetKey, foundCount } from '../engine/scene.js'
+import { foundCount } from '../engine/scene.js'
 import { isIPadLike } from '../engine/saveFile.js'
+import { ROLE_LABEL } from '../modes.js'
 
 const TYPE_LABEL = { bg: '背景 / BOOK', cell: 'セル', audio: '音声' }
+
+function typeLabel(track, sound) {
+  if (!sound) return TYPE_LABEL[track.type]
+  if (track.type === 'bg') return '動画'
+  return ROLE_LABEL[track.role] ?? '音声'
+}
 
 const canPickFolder = () => !isIPadLike() && 'webkitdirectory' in document.createElement('input')
 
@@ -14,39 +21,42 @@ function stamp(iso) {
 }
 
 /**
- * 読み込んだシーン JSON に、素材を名前で結び直してもらう画面。
- * フォルダやファイルを渡すと、シーンが要求している名前と突き合わせる。
+ * 読み込んだシーン JSON に、素材を結び直してもらう画面。
+ * JSON に書いてあるパスとファイル名を手がかりに、渡された素材や
+ * 覚えている素材フォルダの中身と突き合わせる。
  */
-export default function SceneDialog({ scene, initialFiles, onRestore, onClose }) {
-  // JSON と一緒に落ちてきた素材は最初から結んでおく(フォルダごとのドロップ)
-  const [pool, setPool] = useState(() => {
-    const map = new Map()
-    for (const f of initialFiles ?? []) map.set(assetKey(f.name), f)
-    return map
-  })
+export default function SceneDialog({
+  scene,
+  pool,
+  folders = [],
+  canRemember,
+  onAddFiles,
+  onScanFolders,
+  onRememberFolder,
+  onRestore,
+  onClose,
+  sound = false,
+}) {
+  // 集めた素材は App 側が持っている(フォルダを調べている間、この画面は一度消えるため)
   const [over, setOver] = useState(false)
   const fileInput = useRef(null)
   const dirInput = useRef(null)
 
   const add = (files) => {
-    if (!files || files.length === 0) return
-    setPool((prev) => {
-      const next = new Map(prev)
-      for (const f of files) next.set(assetKey(f.name), f)
-      return next
-    })
+    if (files && files.length > 0) onAddFiles(files)
   }
 
-  const rows = useMemo(
-    () =>
-      scene.tracks.map((t, i) => ({
-        key: i,
-        track: t,
-        need: t.files.length,
-        have: foundCount(t, pool),
-      })),
-    [scene, pool],
-  )
+  const scan = async (remember) => {
+    if (remember && !(await onRememberFolder())) return
+    await onScanFolders()
+  }
+
+  const rows = scene.tracks.map((t, i) => ({
+    key: i,
+    track: t,
+    need: t.files.length,
+    have: foundCount(t, pool),
+  }))
 
   const ready = rows.filter((row) => row.have > 0).length
   const missing = rows.length - ready
@@ -60,6 +70,7 @@ export default function SceneDialog({ scene, initialFiles, onRestore, onClose })
         <p className="hint dialog__meta mono">
           {scene.tracks.length}レイヤー / {scene.stage.width}×{scene.stage.height} / {scene.project.fps}fps
           {scene.savedAt ? ` / ${stamp(scene.savedAt)}` : ''}
+          {scene.folders?.length > 0 ? ` / 📁 ${scene.folders.join(', ')}` : ''}
         </p>
 
         <input
@@ -99,7 +110,7 @@ export default function SceneDialog({ scene, initialFiles, onRestore, onClose })
           }}
         >
           <p className="hint">
-            このシーンで使っていた素材を、ここへドロップするか下のボタンで選んでください。ファイル名で結び直します。
+            このシーンで使っていた素材を、ここへドロップするか下のボタンで選んでください。パスとファイル名で結び直します。
           </p>
           <div className="row">
             <button className="wide" onClick={() => fileInput.current.click()}>
@@ -111,6 +122,18 @@ export default function SceneDialog({ scene, initialFiles, onRestore, onClose })
               </button>
             )}
           </div>
+          {canRemember && (
+            <div className="row">
+              {folders.length > 0 && (
+                <button className="wide" onClick={() => scan(false)}>
+                  🔓 覚えているフォルダから探す
+                </button>
+              )}
+              <button className="wide" onClick={() => scan(true)}>
+                📁 素材フォルダを覚えて探す
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="relink__list">
@@ -124,7 +147,7 @@ export default function SceneDialog({ scene, initialFiles, onRestore, onClose })
               </span>
               <span className="relink__name">
                 {row.track.name}
-                <em className="dim"> / {TYPE_LABEL[row.track.type]}</em>
+                <em className="dim"> / {typeLabel(row.track, sound)}</em>
               </span>
               <span className="relink__count mono">
                 {row.need > 1 ? `${row.have} / ${row.need}枚` : row.have > 0 ? '見つかりました' : '未'}

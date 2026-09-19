@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { composite, placeRect, trackRectAt } from '../engine/compositor.js'
+import { composite, placeRect, trackDeg, trackRectAt } from '../engine/compositor.js'
 import { filesFromDataTransfer } from '../engine/media.js'
 import { activeClip, bgSourceTime, isVisual } from '../engine/timeline.js'
 
@@ -7,6 +7,18 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
 const MIN_SCALE = 0.02
 const MAX_SCALE = 20
+const SNAP_DEG = 15
+
+/** 角度は -180〜180 に畳んでおく(数値と行き来しても増え続けない) */
+const wrapDeg = (deg) => {
+  let v = deg % 360
+  if (v > 180) v -= 360
+  if (v <= -180) v += 360
+  return Math.round(v * 10) / 10
+}
+
+/** b から見た a の向き(度) */
+const degOf = (a, b) => (Math.atan2(a.y - b.y, a.x - b.x) * 180) / Math.PI
 
 /**
  * 背景動画をタイムラインに追従させる。
@@ -49,8 +61,9 @@ function syncVideo(el, target, playing, rate) {
 function syncBgTrack(track, st, muted, volume) {
   const el = track.el
   if (!el) return
-  el.muted = muted || !!track.muted
-  el.volume = volume
+  // 音声を取り出してある動画(音声付加側)は Web Audio が鳴らすので、要素は黙らせる
+  el.muted = muted || !!track.muted || !!track.buffer
+  el.volume = clamp(volume * (track.gain ?? 1), 0, 1)
   const clip = activeClip(track, st.time)
   if (!clip) {
     if (!el.paused) el.pause()
@@ -81,6 +94,7 @@ export default function Stage({
   onGrabTrack,
   onBeginEdit,
   onPatchTrack,
+  canGrab = true,
 }) {
   const canvasRef = useRef(null)
   const hostRef = useRef(null)
@@ -124,10 +138,23 @@ export default function Stage({
     const ctx = canvas.getContext('2d')
     let raf = 0
     let last = performance.now()
+    let parked = false
 
     const tick = (now) => {
       raf = requestAnimationFrame(tick)
       const v = viewRef.current
+
+      // もう一方のアプリを開いている間は、音も映像も止めて何も描かない
+      if (v.asleep) {
+        if (!parked) {
+          parked = true
+          audio.sync({ playing: false, time: 0, rate: 1, tracks: v.tracks, volume: 0 })
+          for (const track of v.tracks) track.el?.pause?.()
+        }
+        last = now
+        return
+      }
+      parked = false
       if (v.frozen) return
 
       const dt = Math.min(0.25, (now - last) / 1000)
@@ -174,11 +201,14 @@ export default function Stage({
       const sr = stageRef.current.getBoundingClientRect()
       const s = cr.width / (v.width || 1)
       const r = placeRect(track, track.width, track.height, v.width, v.height)
+      const deg = trackDeg(track)
       box.style.display = 'block'
       box.style.left = cr.left - sr.left + r.x * s + 'px'
       box.style.top = cr.top - sr.top + r.y * s + 'px'
       box.style.width = r.w * s + 'px'
       box.style.height = r.h * s + 'px'
+      // 枠も絵と同じ角度で回す(軸は枠の中心 = 絵の中心)
+      box.style.transform = deg ? 'rotate(' + deg + 'deg)' : ''
     }
 
     raf = requestAnimationFrame(tick)
@@ -207,7 +237,13 @@ export default function Stage({
     if (id) onPatchTrack(id, patchObj)
   }
 
-  const baseOf = (track) => ({ x: track.x, y: track.y, scale: track.scale })
+  const baseOf = (track) => ({ x: track.x, y: track.y, scale: track.scale, rotate: trackDeg(track) })
+
+  /** 絵の中心。拡縮も回転もここを軸にする */
+  const centerOf = (track) => {
+    const r = placeRect(track, track.width, track.height, view.width, view.height)
+    return { x: r.x + r.w / 2, y: r.y + r.h / 2 }
+  }
 
   const startMove = (track, pointer) => {
     gesture.current = {
@@ -224,6 +260,7 @@ export default function Stage({
       mode: 'pinch',
       trackId: track.id,
       dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      deg: degOf(b, a),
       mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
       base: baseOf(track),
     }
@@ -260,12 +297,14 @@ export default function Stage({
     const g = gesture.current
     if (!g) return
 
+    // 2本指: 広げて拡縮、ひねって回転、動かして移動
     if (g.mode === 'pinch' && pointers.current.size >= 2) {
       const [a, b] = [...pointers.current.values()]
       const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
       patch({
         scale: clamp((g.base.scale * dist) / g.dist, MIN_SCALE, MAX_SCALE),
+        rotate: wrapDeg(g.base.rotate + (degOf(b, a) - g.deg)),
         x: g.base.x + (mid.x - g.mid.x),
         y: g.base.y + (mid.y - g.mid.y),
       })
@@ -282,6 +321,14 @@ export default function Stage({
       const p = pointers.current.get(e.pointerId)
       const dist = Math.max(1, Math.hypot(p.x - g.center.x, p.y - g.center.y))
       patch({ scale: clamp((g.base.scale * dist) / g.dist, MIN_SCALE, MAX_SCALE) })
+      return
+    }
+
+    if (g.mode === 'rotate') {
+      const p = pointers.current.get(e.pointerId)
+      let deg = g.base.rotate + (degOf(p, g.center) - g.deg)
+      if (e.shiftKey) deg = Math.round(deg / SNAP_DEG) * SNAP_DEG
+      patch({ rotate: wrapDeg(deg) })
     }
   }
 
@@ -301,8 +348,7 @@ export default function Stage({
     e.stopPropagation()
     e.preventDefault()
     const p = stageSpace(e)
-    const r = placeRect(target, target.width, target.height, view.width, view.height)
-    const center = { x: r.x + r.w / 2, y: r.y + r.h / 2 }
+    const center = centerOf(target)
     onBeginEdit?.()
     gesture.current = {
       mode: 'scale',
@@ -315,12 +361,36 @@ export default function Stage({
     capture(e)
   }
 
+  /** 枠の上に出るノブ。中心まわりの角度をそのまま角度にする */
+  const onRotateDown = (e) => {
+    if (!target) return
+    e.stopPropagation()
+    e.preventDefault()
+    const p = stageSpace(e)
+    const center = centerOf(target)
+    onBeginEdit?.()
+    gesture.current = {
+      mode: 'rotate',
+      trackId: target.id,
+      center,
+      deg: degOf(p, center),
+      base: baseOf(target),
+    }
+    pointers.current.set(e.pointerId, p)
+    capture(e)
+  }
+
   const onWheel = (e) => {
     if (!grab || !target) return
     e.preventDefault()
     const now = performance.now()
     if (now - lastWheel.current > 400) onBeginEdit?.()
     lastWheel.current = now
+    // Shift を押しながらなら回転、そうでなければ拡縮
+    if (e.shiftKey) {
+      onPatchTrack(target.id, { rotate: wrapDeg(trackDeg(target) + e.deltaY * 0.12) })
+      return
+    }
     const next = clamp(target.scale * (1 - e.deltaY * 0.0015), MIN_SCALE, MAX_SCALE)
     onPatchTrack(target.id, { scale: next })
   }
@@ -328,7 +398,13 @@ export default function Stage({
   const reset = () => {
     if (!target) return
     onBeginEdit?.()
-    onPatchTrack(target.id, { scale: 1, x: 0, y: 0 })
+    onPatchTrack(target.id, { scale: 1, x: 0, y: 0, rotate: 0 })
+  }
+
+  const straighten = () => {
+    if (!target) return
+    onBeginEdit?.()
+    onPatchTrack(target.id, { rotate: 0 })
   }
 
   return (
@@ -368,12 +444,22 @@ export default function Stage({
             onPointerCancel={onGrabUp}
           />
         ))}
+        <span
+          className="stage__rot"
+          title="ドラッグで回転(Shift で15度ずつ)"
+          onPointerDown={onRotateDown}
+          onPointerMove={onGrabMove}
+          onPointerUp={onGrabUp}
+          onPointerCancel={onGrabUp}
+        />
       </div>
 
       <div className="stage__tools">
-        <button className={grab ? 'primary' : ''} onClick={() => onGrab(!grab)} title="ステージ上で直接動かす">
-          ✥ 直接操作
-        </button>
+        {canGrab && (
+          <button className={grab ? 'primary' : ''} onClick={() => onGrab(!grab)} title="ステージ上で直接動かす">
+            ✥ 直接操作
+          </button>
+        )}
         {grab && (
           <>
             <select
@@ -391,8 +477,10 @@ export default function Stage({
             {target && (
               <>
                 <span className="mono dim">
-                  {Math.round(target.scale * 100)}% / {Math.round(target.x)},{Math.round(target.y)}
+                  {Math.round(target.scale * 100)}% / {Math.round(target.x)},{Math.round(target.y)} /{' '}
+                  {Math.round(trackDeg(target))}°
                 </span>
+                {trackDeg(target) !== 0 && <button onClick={straighten}>回転を戻す</button>}
                 <button onClick={reset}>リセット</button>
               </>
             )}
@@ -402,7 +490,9 @@ export default function Stage({
 
       {grab && (
         <p className="stage__grabhint">
-          {target ? 'ドラッグで移動、角をつまむ / ピンチ / ホイールで拡縮' : '動かしたいレイヤーをステージで触るか、上で選んでください'}
+          {target
+            ? 'ドラッグで移動、角をつまむ / ピンチ / ホイールで拡縮、上のノブ / 2本指ひねり / Shift+ホイールで回転'
+            : '動かしたいレイヤーをステージで触るか、上で選んでください'}
         </p>
       )}
 

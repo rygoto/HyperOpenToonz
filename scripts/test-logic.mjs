@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { composite, fitRect, placeRect, trackRectAt } from '../src/engine/compositor.js'
+import { filePath, markPath } from '../src/engine/media.js'
 import {
   applyPreset,
   buildLut,
@@ -20,8 +21,13 @@ import { sanitizeFilename, withExtension } from '../src/engine/saveFile.js'
 import {
   assetKey,
   foundCount,
+  makePool,
   parseScene,
+  pathKey,
+  poolCoversScene,
+  poolFind,
   sceneAssetNames,
+  sceneAssets,
   sceneToText,
   serializeScene,
 } from '../src/engine/scene.js'
@@ -540,11 +546,302 @@ test('シーン: 素材はファイル名で結び直す(大文字小文字と�
 
   assert.equal(assetKey('C:\\work\\CutA_0001.PNG'), 'cuta_0001.png')
 
-  const pool = new Map([
-    [assetKey('BG.PNG'), 'file'],
-    [assetKey('cuts/cutA_0001.png'), 'file'],
-  ])
+  const pool = makePool([{ name: 'BG.PNG' }, { name: 'cutA_0001.png' }])
   assert.equal(foundCount(scene.tracks[0], pool), 1)
   assert.equal(foundCount(scene.tracks[1], pool), 1) // 2コマ中1コマだけ見つかった
   assert.equal(foundCount(scene.tracks[2], pool), 0)
+})
+
+/* ---------------- 回転 ---------------- */
+
+/** 回転の当たり判定と描画を見るための、記録だけするコンテキスト */
+function recordingCtx(log = []) {
+  return {
+    log,
+    setTransform() {},
+    clearRect() {},
+    fillRect() {},
+    save() {
+      log.push(['save'])
+    },
+    restore() {
+      log.push(['restore'])
+    },
+    translate(x, y) {
+      log.push(['translate', x, y])
+    },
+    rotate(a) {
+      log.push(['rotate', a])
+    },
+    drawImage(src, x, y, w, h) {
+      log.push(['draw', src, x, y, w, h])
+    },
+  }
+}
+
+test('回転: 中心を軸に回して描く。0度なら余計なことはしない', () => {
+  const cell = cellTrack({
+    frames: ['cel0'],
+    width: 100,
+    height: 100,
+    clips: [{ id: 'c', start: 0, in: 0, len: 1 }],
+  })
+  const view = { width: 200, height: 100, bgColor: '#000', checker: false, tracks: [cell] }
+
+  const flat = recordingCtx()
+  composite(flat, view, 0)
+  assert.deepEqual(flat.log, [['draw', 'cel0', 50, 0, 100, 100]])
+
+  const turned = recordingCtx()
+  composite(turned, { ...view, tracks: [{ ...cell, rotate: 90 }] }, 0)
+  assert.deepEqual(turned.log, [
+    ['save'],
+    ['translate', 100, 50], // 絵の中心
+    ['rotate', Math.PI / 2],
+    ['draw', 'cel0', -50, -50, 100, 100], // 中心を原点に置いて描く
+    ['restore'],
+  ])
+})
+
+test('回転: 拡大率と位置は回しても変わらない(軸は絵の中心)', () => {
+  const a = placeRect(cellTrack({ rotate: 0, scale: 2, x: 10 }), 100, 100, 200, 100)
+  const b = placeRect(cellTrack({ rotate: 33, scale: 2, x: 10 }), 100, 100, 200, 100)
+  assert.deepEqual(a, b)
+})
+
+test('回転: 当たり判定も一緒に回る', () => {
+  // 横長の絵を 90 度回すと、縦に長い当たり判定になる
+  const wide = cellTrack({ width: 200, height: 40, fit: 'none' })
+  const turned = { ...wide, rotate: 90 }
+  const above = { x: 100, y: 20 } // 中心から上へ 60px
+  const side = { x: 180, y: 80 } // 中心から右へ 80px
+
+  assert.equal(trackRectAt([wide], 200, 160, above.x, above.y), null)
+  assert.equal(trackRectAt([turned], 200, 160, above.x, above.y).track.id, 't1')
+  assert.equal(trackRectAt([wide], 200, 160, side.x, side.y).track.id, 't1')
+  assert.equal(trackRectAt([turned], 200, 160, side.x, side.y), null)
+})
+
+test('シーン: 回転も保存して読み直せる', () => {
+  const doc = sampleScene()
+  doc.tracks[1].rotate = -12.5
+  const scene = parseScene(sceneToText(doc))
+  assert.equal(scene.tracks[1].rotate, -12.5)
+  // 回転を持っていない版1の JSON は 0 度として読む
+  assert.equal(parseScene(sceneToText(sampleScene())).tracks[1].rotate, 0)
+})
+
+/* ---------------- 素材のパス ---------------- */
+
+/** ファイルのふり(結び直しはファイル名とパスしか見ない) */
+const fakeFile = (path) => markPath({ name: path.split('/').pop() }, path)
+
+test('パス: 区切りと大文字小文字を揃えて覚える', () => {
+  assert.equal(pathKey(String.raw`.\Cuts\A\0001.PNG`), 'cuts/a/0001.png')
+  assert.equal(filePath(fakeFile('/cuts/A/0001.png')), 'cuts/A/0001.png')
+  // パスが分からないファイルは名前がそのままパスになる
+  assert.equal(filePath({ name: '0001.png' }), '0001.png')
+})
+
+test('シーン: 素材のパスも書き出して読み直せる。無ければファイル名で代用する', () => {
+  const cell = cellTrack({
+    name: 'cutA',
+    files: ['0001.png', '0002.png'],
+    paths: ['素材/cutA/0001.png', '素材/cutA/0002.png'],
+    frames: new Array(2),
+    clips: [{ id: 'c1', start: 0, in: 0, len: 2 }],
+  })
+  const doc = serializeScene({
+    tracks: [cell],
+    stage: { width: 640, height: 360, autoSize: false, bgColor: '#000', checker: false },
+    projectFps: 24,
+    muted: false,
+    volume: 1,
+    name: 'cutA',
+    folders: [{ name: '素材' }],
+  })
+  assert.deepEqual(doc.folders, ['素材'])
+
+  const scene = parseScene(sceneToText(doc))
+  assert.deepEqual(scene.tracks[0].paths, ['素材/cutA/0001.png', '素材/cutA/0002.png'])
+  assert.deepEqual(sceneAssets(scene), [
+    { name: '0001.png', path: '素材/cutA/0001.png' },
+    { name: '0002.png', path: '素材/cutA/0002.png' },
+  ])
+
+  // 版1(パス無し)の JSON はファイル名をパスとして読む
+  const old = JSON.parse(sceneToText(doc))
+  old.version = 1
+  for (const t of old.tracks) delete t.paths
+  assert.deepEqual(parseScene(JSON.stringify(old)).tracks[0].paths, ['0001.png', '0002.png'])
+})
+
+test('結び直し: 同じ名前が複数あってもパスで選び分ける', () => {
+  const a = fakeFile('素材/cutA/0001.png')
+  const b = fakeFile('素材/cutB/0001.png')
+  const pool = makePool([a, b])
+
+  assert.equal(poolFind(pool, '0001.png', '素材/cutA/0001.png'), a)
+  assert.equal(poolFind(pool, '0001.png', '素材/cutB/0001.png'), b)
+  // 中の階層がずれていても、末尾がよく合うほうを選ぶ
+  assert.equal(poolFind(pool, '0001.png', 'work/2024/cutB/0001.png'), b)
+  // パスが分からなければ名前だけで引く(どちらか一方が返る)
+  assert.ok([a, b].includes(poolFind(pool, '0001.png')))
+  assert.equal(poolFind(pool, '9999.png', '素材/cutA/9999.png'), null)
+})
+
+test('結び直し: 素材が全部そろっているかを見て、揃っていれば訊かずに復元できる', () => {
+  const cell = cellTrack({
+    files: ['0001.png', '0002.png'],
+    paths: ['素材/cutA/0001.png', '素材/cutA/0002.png'],
+    frames: new Array(2),
+    clips: [{ id: 'c1', start: 0, in: 0, len: 2 }],
+  })
+  const scene = parseScene(
+    sceneToText(
+      serializeScene({
+        tracks: [cell],
+        stage: { width: 640, height: 360, autoSize: true, bgColor: '#000', checker: true },
+        projectFps: 24,
+        muted: false,
+        volume: 1,
+        name: '',
+      }),
+    ),
+  )
+
+  const half = makePool([fakeFile('素材/cutA/0001.png')])
+  assert.equal(poolCoversScene(scene, half), false)
+  assert.equal(foundCount(scene.tracks[0], half), 1)
+
+  const all = makePool([fakeFile('素材/cutA/0001.png'), fakeFile('素材/cutA/0002.png')])
+  assert.equal(poolCoversScene(scene, all), true)
+
+  // 別のフォルダに引っ越していても、名前が同じなら見つかる
+  const moved = makePool([fakeFile('backup/0001.png'), fakeFile('backup/0002.png')])
+  assert.equal(poolCoversScene(scene, moved), true)
+})
+
+/* ---------------- 音声付加 ---------------- */
+
+test('音声付加: シーンはどちらのアプリのものかを覚える。mode の無い JSON はアニメーション側', () => {
+  const video = bgTrack({
+    kind: 'video',
+    name: 'take1.mp4',
+    fileName: 'take1.mp4',
+    duration: 12,
+    gain: 1.5,
+    clips: [{ id: 'c1', start: 0, in: 2, len: 8 }],
+  })
+  const bgm = audioTrack({ name: 'bgm', fileName: 'bgm.mp3', role: 'bgm', gain: 0.5, clips: [{ id: 'c2', start: 0, in: 0, len: 8 }] })
+  const se = audioTrack({ name: 'pop', fileName: 'pop.wav', role: 'se', clips: [{ id: 'c3', start: 3.25, in: 0, len: 0.4 }] })
+  const doc = serializeScene({
+    tracks: [video, bgm, se],
+    stage: { width: 1920, height: 1080, autoSize: true, bgColor: '#000', checker: true },
+    projectFps: 30,
+    exportFps: 60,
+    muted: false,
+    volume: 1,
+    name: 'take1',
+    mode: 'sound',
+  })
+  assert.equal(doc.mode, 'sound')
+
+  const scene = parseScene(sceneToText(doc))
+  assert.equal(scene.mode, 'sound')
+  assert.equal(scene.project.exportFps, 60)
+  assert.equal(scene.tracks[0].gain, 1.5)
+  assert.deepEqual(scene.tracks[0].clips, [{ start: 0, in: 2, len: 8 }])
+  assert.deepEqual(scene.tracks.map((t) => t.role), [undefined, 'bgm', 'se'])
+  assert.equal(scene.tracks[1].gain, 0.5)
+  assert.equal(scene.tracks[2].clips[0].start, 3.25)
+
+  // 前からある JSON(mode 無し、動画の gain 無し)
+  const old = JSON.parse(sceneToText(sampleScene()))
+  delete old.mode
+  delete old.tracks[0].gain
+  const anime = parseScene(JSON.stringify(old))
+  assert.equal(anime.mode, 'anime')
+  // 出力 fps を持っていない JSON は 24fps で書き出す
+  delete old.project.exportFps
+  assert.equal(parseScene(JSON.stringify(old)).project.exportFps, 24)
+  assert.equal(anime.tracks[0].gain, 1)
+  assert.equal(anime.tracks[2].role, undefined)
+})
+
+test('音声付加: BGM を繰り返しても動画の尻で切れる', async () => {
+  const { trimTrackTo } = await import('../src/engine/timeline.js')
+  const bgm = audioTrack({ duration: 4 })
+  bgm.clips = [whole(bgm)]
+  const filled = trimTrackTo(repeatToFill(bgm, 10), 10)
+  assert.deepEqual(
+    filled.clips.map((c) => [c.start, c.len]),
+    [
+      [0, 4],
+      [4, 4],
+      [8, 2],
+    ],
+  )
+  assert.equal(trackEndSec(filled), 10)
+  // 切るものが無ければそのまま返す
+  assert.equal(trimTrackTo(filled, 10), filled)
+  // 尻より後ろから始まるクリップは落とす
+  assert.deepEqual(trimTrackTo(filled, 5).clips.map((c) => [c.start, c.len]), [
+    [0, 4],
+    [4, 1],
+  ])
+})
+
+test('音声付加: 音を取り出した動画も Web Audio で鳴らし、音量だけの変更では組み直さない', async () => {
+  const { sameSchedule, trackSound } = await import('../src/engine/audio.js')
+  const buffer = { duration: 12 }
+  const video = bgTrack({ kind: 'video', buffer, gain: 1.5, clips: [{ id: 'c1', start: 0, in: 0, len: 12 }] })
+  assert.deepEqual(trackSound(video), { buffer, gain: 1.5 })
+  // 取り出していない動画(アニメーション側)は video 要素が鳴らす
+  assert.equal(trackSound(bgTrack({ kind: 'video' })), null)
+  assert.equal(trackSound({ ...video, muted: true }), null)
+  assert.equal(trackSound(cellTrack()), null)
+
+  const se = audioTrack({ buffer: { duration: 1 }, clips: [{ id: 'c2', start: 1, in: 0, len: 1 }] })
+  const tracks = [video, se]
+  assert.equal(sameSchedule(tracks, [video, { ...se, gain: 0.3 }]), true)
+  assert.equal(sameSchedule(tracks, [video, { ...se, muted: true }]), false)
+  assert.equal(sameSchedule(tracks, [video, { ...se, clips: [...se.clips] }]), false)
+  assert.equal(sameSchedule(tracks, [video]), false)
+})
+
+test('素材ごと保存: .piyo にまとめて開き直すと、シーンと素材の中身が元どおりに戻る', async () => {
+  const { packBundle, readZip, trackSources, unpackBundle } = await import('../src/engine/bundle.js')
+  const { serializeScene } = await import('../src/engine/scene.js')
+  const bytes = (n, seed) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 0xff)
+  const video = markPath(new File([bytes(5000, 1)], 'cut01.mp4'), 'work/cut01.mp4')
+  const cells = [1, 2].map((i) => markPath(new File([bytes(300, i + 10)], `c_000${i}.png`), `work/セル/c_000${i}.png`))
+  // 別のフォルダにある同じ名前のものも取り違えない
+  const se = markPath(new File([bytes(700, 3)], 'c_0001.png'), 'other/c_0001.png')
+  const tracks = [
+    bgTrack({ kind: 'video', name: 'cut01', fileName: 'cut01.mp4', path: 'work/cut01.mp4', sources: [video], fx: undefined, clips: [{ id: 'k', start: 0, in: 1, len: 2 }] }),
+    cellTrack({ name: 'c', files: ['c_0001.png', 'c_0002.png'], paths: cells.map(filePath), sources: cells, frames: new Array(2), clips: [] }),
+    bgTrack({ name: 'still', fileName: 'c_0001.png', path: 'other/c_0001.png', sources: [se], clips: [] }),
+  ]
+  const doc = serializeScene({ tracks, stage: {}, projectFps: 24, exportFps: 30, muted: false, volume: 1, name: 'n', folders: [], mode: 'sound' })
+  const { assets, missing } = trackSources(tracks)
+  assert.deepEqual(missing, [])
+  assert.equal(assets.length, 4)
+
+  const blob = await packBundle(doc, assets)
+  assert.equal((await readZip(blob)).size, 5)
+
+  const { text, files } = await unpackBundle(new File([blob], 'x.piyo'))
+  const scene = parseScene(text)
+  assert.equal(scene.mode, 'sound')
+  assert.equal(scene.project.exportFps, 30)
+  const pool = makePool(files)
+  assert.equal(poolCoversScene(scene, pool), true)
+  for (const orig of [video, ...cells, se]) {
+    const got = poolFind(pool, orig.name, filePath(orig))
+    assert.deepEqual(new Uint8Array(await got.arrayBuffer()), new Uint8Array(await orig.arrayBuffer()))
+  }
+
+  // 実物を持たないレイヤーがあればまとめない
+  assert.deepEqual(trackSources([bgTrack({ name: 'x', fileName: 'x.png' })]).missing, ['x'])
 })

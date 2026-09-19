@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClock } from './engine/clock.js'
-import { createAudioEngine, decodeAudioFile } from './engine/audio.js'
+import { createAudioEngine, decodeAudioFile, decodeVideoAudio } from './engine/audio.js'
+import { MODE_IDS, MODES, ROLE_LABEL } from './modes.js'
 import { nextId } from './engine/ids.js'
 import {
   clipContains,
@@ -11,8 +12,9 @@ import {
   sortClips,
   splitClip,
   trackEndSec,
+  trimTrackTo,
 } from './engine/timeline.js'
-import { kindOf, loadBackground, loadCellSequence, sortByName } from './engine/media.js'
+import { filePath, kindOf, loadBackground, loadCellSequence, sortByName } from './engine/media.js'
 import Stage from './components/Stage.jsx'
 import Transport from './components/Transport.jsx'
 import Timeline from './components/Timeline.jsx'
@@ -23,27 +25,48 @@ import ScenePanel from './components/ScenePanel.jsx'
 import SceneDialog from './components/SceneDialog.jsx'
 import { exportComposedVideo } from './engine/exportVideo.js'
 import { clearFxCache, defaultFx } from './engine/fx.js'
-import { parseScene, restoreScene, sceneToText, serializeScene, SCENE_EXT } from './engine/scene.js'
 import {
+  addToPool,
+  makePool,
+  parseScene,
+  poolCoversScene,
+  restoreScene,
+  sceneToText,
+  serializeScene,
+  SCENE_EXT,
+} from './engine/scene.js'
+import {
+  canRememberFolders,
+  collectFromFolders,
+  forgetSourceFolder,
+  listSourceFolders,
+  rememberSourceFolder,
+} from './engine/assetLibrary.js'
+import { BUNDLE_EXT, BUNDLE_MIME, isBundleFile, packBundle, trackSources, unpackBundle } from './engine/bundle.js'
+import {
+  discardSaveTarget,
   fileStamp,
   forgetExportDirectory,
   loadExportDirectory,
   pickExportDirectory,
+  pickSaveTarget,
   reauthorizeDirectory,
   saveBlob,
   withExtension,
+  writeSaveTarget,
 } from './engine/saveFile.js'
 import { useMatchMedia } from './hooks/useMatchMedia.js'
 
 const DEFAULT_CELL_FPS = 8
 const FALLBACK_DURATION = 5
+// 音声付加側で静止画を置いたときの長さ(秒)
+const STILL_DURATION = 3
 const HISTORY_LIMIT = 100
 
 // 上下分割(プレビュー / タイムライン)の下限
 const MIN_TIMELINE_H = 96
 const MIN_STAGE_H = 140
 const SPLIT_KEY = 'piyopiyo.timelineHeight'
-const NAME_KEY = 'piyopiyo.exportName'
 const SIMPLE_KEY = 'piyopiyo.simple'
 
 function loadSimple() {
@@ -69,7 +92,23 @@ function nameFromFiles(files) {
   return base.replace(/[_\-. ]*\d+$/, '') || base
 }
 
-export default function App() {
+/**
+ * 編集画面ひとつぶん。mode で中身が変わる。
+ *   anime … 背景 / BOOK + 透過セル連番 + 音声(撮影処理あり)
+ *   sound … 動画 + BGM / SE(動画の切り貼りと音量の調整。撮影処理・連番は無し)
+ * active でないあいだは隠れて、再生も描画も止まる(作業は残る)。
+ */
+export default function App({
+  mode = 'anime',
+  active = true,
+  onMode,
+  handoff = null,
+  onHandOver,
+  onHandoffDone,
+}) {
+  const cfg = MODES[mode] ?? MODES.anime
+  const sound = cfg.id === 'sound'
+
   const clockRef = useRef(null)
   if (!clockRef.current) clockRef.current = createClock()
   const clock = clockRef.current
@@ -87,7 +126,9 @@ export default function App() {
     bgColor: '#000000',
     checker: true,
   })
-  const [projectFps, setProjectFps] = useState(24)
+  const [projectFps, setProjectFps] = useState(cfg.fps)
+  // 書き出す動画の fps。プロジェクト fps(コマ送りの単位)とは別に決める
+  const [exportFps, setExportFps] = useState(24)
   const [muted, setMuted] = useState(false)
   const [volume, setVolume] = useState(1)
   const [busy, setBusy] = useState(null)
@@ -104,9 +145,12 @@ export default function App() {
   // シンプル表示: 数値や細かい調整を隠して、作業に要るものだけ出す
   const [simple, setSimple] = useState(loadSimple)
 
-  // 読み込んだシーン JSON(素材を結び直すのを待っている状態)と、一緒に渡された素材
+  // 読み込んだシーン JSON(素材を結び直すのを待っている状態)と、そこまでに集まった素材
   const [sceneDoc, setSceneDoc] = useState(null)
-  const [sceneFiles, setSceneFiles] = useState([])
+  const [scenePool, setScenePool] = useState(null)
+
+  // 覚えている素材フォルダ(シーンを開いたとき、ここから自動で結び直す)
+  const [folders, setFolders] = useState([])
 
   // 書き出しの設定
   const [exportOpen, setExportOpen] = useState(false)
@@ -207,6 +251,13 @@ export default function App() {
   }, [audio])
 
   useEffect(() => () => audio.dispose(), [audio])
+
+  // もう一方のアプリに切り替えたら、こちらは止めておく
+  useEffect(() => {
+    if (active) return
+    clock.pause()
+    setGrab(false)
+  }, [active, clock])
 
   // ---------- 上下分割 ----------
   const clampTl = useCallback((h) => {
@@ -318,6 +369,8 @@ export default function App() {
           kind: src.kind,
           name: src.name,
           fileName: file.name,
+          path: filePath(file),
+          sources: [file],
           el: src.el,
           url: src.url,
           width: src.width,
@@ -326,6 +379,7 @@ export default function App() {
           fit: 'contain',
           opacity: 1,
           scale: 1,
+          rotate: 0,
           x: 0,
           y: 0,
           blend: 'source-over',
@@ -363,12 +417,15 @@ export default function App() {
           type: 'cell',
           name: nameFromFiles(images),
           files: seq.names,
+          paths: seq.paths,
+          sources: seq.sources,
           frames: seq.frames,
           width: seq.width,
           height: seq.height,
           fps: DEFAULT_CELL_FPS,
           opacity: 1,
           scale: 1,
+          rotate: 0,
           x: 0,
           y: 0,
           fit: 'contain',
@@ -389,13 +446,93 @@ export default function App() {
     [commit, say],
   )
 
-  const addAudioTracks = useCallback(
+  /**
+   * 音声付加側: 動画と静止画を読み込む。1つ目は先頭、2つ目からは今ある動画の後ろへつなげる。
+   * 動画に入っている音は取り出しておき、Web Audio で鳴らす(ゲインと波形のため)。
+   * 静止画は STILL_DURATION 秒の1カットとして置く(タイムラインで伸び縮みできる)。
+   */
+  const addVideoTracks = useCallback(
     async (files) => {
+      const list = sortByName(files.filter((f) => kindOf(f) === 'video' || kindOf(f) === 'image'))
+      if (list.length === 0) {
+        say('動画 / 画像ファイルが見つかりませんでした', 'error')
+        return
+      }
+      const made = []
+      let at = Math.max(0, ...tracksRef.current.filter((t) => t.type === 'bg').map(trackEndSec))
+      let failed = null
+      try {
+        for (let i = 0; i < list.length; i++) {
+          const file = list[i]
+          setBusy({ label: `${file.name} を読み込み中…`, done: i, total: list.length })
+          const src = await loadBackground(file)
+          let extracted = null
+          if (src.kind === 'video') {
+            setBusy({ label: `${file.name} の音声を取り出し中…`, done: i, total: list.length })
+            extracted = await decodeVideoAudio(file)
+          }
+          const track = {
+            id: nextId('track'),
+            type: 'bg',
+            kind: src.kind,
+            name: src.name,
+            fileName: file.name,
+            path: filePath(file),
+            sources: [file],
+            el: src.el,
+            url: src.url,
+            width: src.width,
+            height: src.height,
+            duration: src.duration,
+            fit: 'contain',
+            opacity: 1,
+            scale: 1,
+            rotate: 0,
+            x: 0,
+            y: 0,
+            blend: 'source-over',
+            fx: defaultFx(),
+            visible: true,
+            muted: false,
+            gain: 1,
+            buffer: extracted?.buffer ?? null,
+            peaks: extracted?.peaks ?? null,
+            clips: [],
+          }
+          const len = src.kind === 'video' ? (src.duration > 0 ? src.duration : FALLBACK_DURATION) : STILL_DURATION
+          track.clips = [makeClip(track, { start: at, len })]
+          at = trackEndSec(track)
+          made.push(track)
+        }
+      } catch (e) {
+        failed = e
+      } finally {
+        setBusy(null)
+      }
+      if (made.length > 0) {
+        commit((prev) => {
+          // 動画は音声トラックより上にまとめておく
+          const next = [...prev]
+          next.splice(prev.findLastIndex((t) => t.type === 'bg') + 1, 0, ...made)
+          return next
+        })
+      }
+      if (failed) say(failed.message || '読み込めませんでした', 'error')
+      else if (made.length === 1) say(`${made[0].name} を ${made[0].clips[0].start.toFixed(2)}秒の位置に置きました`)
+      else say(`${made.length}個の動画 / 画像をつなげて置きました`)
+    },
+    [commit, say],
+  )
+
+  const addAudioTracks = useCallback(
+    async (files, { role } = {}) => {
       const list = files.filter((f) => kindOf(f) === 'audio')
       if (list.length === 0) {
         say('音声ファイルが見つかりませんでした', 'error')
         return
       }
+      // SE は再生ヘッドの位置、BGM とアニメーション側の音声は先頭に置く
+      const at = role === 'se' ? clock.peek().time : 0
       setBusy({ label: '音声をデコード中…', done: 0, total: list.length })
       const made = []
       try {
@@ -407,26 +544,33 @@ export default function App() {
             type: 'audio',
             name: file.name.replace(/\.[^.]+$/, ''),
             fileName: file.name,
+            path: filePath(file),
+            sources: [file],
             buffer: src.buffer,
             peaks: src.peaks,
             duration: src.duration,
+            ...(role ? { role } : {}),
             gain: 1,
             muted: false,
             clips: [],
           }
-          track.clips = [makeClip(track, { start: 0 })]
+          track.clips = [makeClip(track, { start: at })]
           made.push(track)
           setBusy({ label: '音声をデコード中…', done: i + 1, total: list.length })
         }
         commit((prev) => [...prev, ...made])
-        say(`${made.length}件の音声を読み込みました`)
+        say(
+          role
+            ? `${made.length}件の${ROLE_LABEL[role]}を${role === 'se' ? `${at.toFixed(2)}秒の位置` : '先頭'}に置きました`
+            : `${made.length}件の音声を読み込みました`,
+        )
       } catch (e) {
         say(`音声を読み込めません: ${e.message}`, 'error')
       } finally {
         setBusy(null)
       }
     },
-    [commit, say],
+    [clock, commit, say],
   )
 
   // ---------- トラック操作 ----------
@@ -477,6 +621,14 @@ export default function App() {
   const repeatFill = useCallback(
     (id) =>
       commit((prev) => {
+        if (sound) {
+          // 音声付加側は動画の尻まで埋めて、はみ出した分は切る(動画が無ければ他のトラックの一番長いところ)
+          const videos = prev.filter((t) => t.type === 'bg' && t.id !== id)
+          const others = videos.length > 0 ? videos : prev.filter((t) => t.id !== id)
+          const end = Math.max(0, ...others.map(trackEndSec))
+          if (!(end > 0)) return prev
+          return prev.map((t) => (t.id === id ? trimTrackTo(repeatToFill(t, end), end) : t))
+        }
         // 埋める先は「自分以外」の一番長いところ。何も無ければ既定の尺まで。
         const end = Math.max(
           FALLBACK_DURATION,
@@ -484,7 +636,7 @@ export default function App() {
         )
         return prev.map((t) => (t.id === id ? repeatToFill(t, end) : t))
       }),
-    [commit],
+    [commit, sound],
   )
 
   // ---------- クリップ編集 ----------
@@ -633,6 +785,8 @@ export default function App() {
 
   // ---------- キーボード ----------
   useEffect(() => {
+    // 隠れている側のアプリはキーを拾わない
+    if (!active) return
     const onKey = (e) => {
       const tag = e.target?.tagName
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
@@ -704,6 +858,7 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [
+    active,
     clock,
     copySelection,
     cutSelection,
@@ -718,32 +873,181 @@ export default function App() {
     undo,
   ])
 
+  const changeExportName = useCallback((name) => {
+    setExportName(name)
+    try {
+      window.localStorage.setItem(cfg.nameKey, name)
+    } catch {
+      /* noop */
+    }
+  }, [cfg.nameKey])
+
+  /** 素材が揃ったので、今の内容をシーンで置き換える(元に戻すで戻れる) */
+  const applyScene = useCallback(
+    async (doc, pool, { auto = false, bundled = false } = {}) => {
+      if (!doc) return
+      setSceneDoc(null)
+      setScenePool(null)
+      setBusy({ label: 'シーンを復元中…', done: 0, total: doc.tracks.length })
+      try {
+        const out = await restoreScene(doc, pool, {
+          onProgress: (done, total, label) => setBusy({ label, done, total }),
+        })
+        if (out.tracks.length === 0) {
+          say('素材が見つからず、復元できませんでした', 'error')
+          return
+        }
+        // 中身がそっくり入れ替わるので、焼き溜めた撮影処理はここで手放す
+        clearFxCache()
+        commit(out.tracks)
+        setSelection([])
+        setStage(out.stage)
+        setProjectFps(out.projectFps)
+        setExportFps(out.exportFps)
+        setMuted(out.muted)
+        setVolume(out.volume)
+        if (out.name) changeExportName(out.name)
+        clock.stop()
+        say(
+          out.skipped.length > 0
+            ? `シーンを復元しました(素材が見つからない${out.skipped.length}レイヤーは飛ばしました)`
+            : bundled
+              ? '中に入っていた素材で、シーンを元どおりに復元しました'
+              : auto
+                ? '同じ場所の素材が見つかったので、そのまま復元しました'
+              : 'シーンを復元しました',
+        )
+      } catch (e) {
+        say(e?.message || 'シーンを復元できませんでした', 'error')
+      } finally {
+        setBusy(null)
+      }
+    },
+    [changeExportName, clock, commit, say],
+  )
+
+  // ---------- 素材フォルダ ----------
+  // 覚えているフォルダは起動時に拾っておく(許可が切れていても名前は出す)
+  useEffect(() => {
+    let alive = true
+    listSourceFolders().then((list) => {
+      if (alive) setFolders(list)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const rememberFolder = useCallback(async () => {
+    try {
+      const picked = await rememberSourceFolder()
+      if (!picked) return null
+      setFolders(await listSourceFolders())
+      say(`📁 ${picked.name} を素材フォルダとして覚えました`)
+      return picked
+    } catch (e) {
+      if (e?.name !== 'AbortError') say(e?.message || 'フォルダを覚えられませんでした', 'error')
+      return null
+    }
+  }, [say])
+
+  /** 結び直し中の素材を足す(ドロップやファイル選択、フォルダ探索の結果) */
+  const addSceneFiles = useCallback((files) => {
+    if (!files || files.length === 0) return
+    setScenePool((prev) => ({ ...addToPool(prev ?? makePool([]), files) }))
+  }, [])
+
+  const forgetFolder = useCallback(async (id) => {
+    await forgetSourceFolder(id)
+    setFolders(await listSourceFolders())
+  }, [])
+
+  /** 覚えているフォルダから、このシーンが要る素材を拾う(許可が要ればここで訊く) */
+  const scanFolders = useCallback(
+    async (doc) => {
+      try {
+        const found = await collectFromFolders(doc, {
+          request: true,
+          onProgress: (done, total, label) => setBusy({ label, done, total }),
+        })
+        setFolders(await listSourceFolders())
+        return found
+      } catch (e) {
+        say(e?.message || 'フォルダを読めませんでした', 'error')
+        return { files: [], blocked: [], used: [] }
+      } finally {
+        setBusy(null)
+      }
+    },
+    [say],
+  )
+
   // ---------- シーンを開く ----------
   /**
-   * JSON を開く。ここではまだ何も差し替えず、素材を結び直す画面を出すだけ。
-   * 一緒に落ちてきた素材(フォルダごとのドロップなど)は最初から結んでおく。
+   * JSON / .piyo を開く。
+   * .piyo は素材が中に入っているので、それだけで復元できる。
+   * JSON のときは、一緒に落ちてきた素材(フォルダごとのドロップなど)と、覚えている素材フォルダの
+   * 中身を先に当たってみて、全部そろえば何も訊かずにそのまま復元する。
+   * 足りないぶんがあるときだけ、素材を結び直す画面を出す。
    */
   const openScene = useCallback(
     async (file, withFiles = []) => {
+      let doc
+      let bundled = []
       try {
-        const doc = parseScene(await file.text())
-        setSceneFiles(withFiles)
-        setSceneDoc(doc)
-        clock.pause()
-        setExportOpen(false)
-        setAssetsOpen(false)
+        if (isBundleFile(file)) {
+          const unpacked = await unpackBundle(file)
+          bundled = unpacked.files
+          doc = parseScene(unpacked.text)
+        } else {
+          doc = parseScene(await file.text())
+        }
       } catch (e) {
         say(e?.message || 'シーンを読み込めませんでした', 'error')
+        return
       }
+      // もう一方のアプリで作ったシーンなら、そちらへ切り替えて開いてもらう
+      if (doc.mode !== cfg.id && onHandOver) {
+        onHandOver({ mode: doc.mode, file, files: withFiles })
+        return
+      }
+      clock.pause()
+      setExportOpen(false)
+      setAssetsOpen(false)
+
+      // 中に入っていた素材を先に、一緒に渡されたものを後に(同じパスなら後勝ち)
+      const pool = makePool([...bundled, ...withFiles])
+      if (!poolCoversScene(doc, pool) && canRememberFolders()) {
+        const found = await scanFolders(doc)
+        addToPool(pool, found.files)
+      }
+
+      if (poolCoversScene(doc, pool)) {
+        await applyScene(doc, pool, { auto: true, bundled: bundled.length > 0 })
+        return
+      }
+      setScenePool(pool)
+      setSceneDoc(doc)
     },
-    [clock, say],
+    [applyScene, cfg.id, clock, onHandOver, say, scanFolders],
   )
+
+  // もう一方のアプリから回ってきたシーン JSON を開く
+  const handled = useRef(null)
+  useEffect(() => {
+    if (!active || !handoff || handled.current === handoff) return
+    handled.current = handoff
+    onHandoffDone?.()
+    say(`${cfg.label}のシーンなので、${cfg.label}に切り替えました`)
+    openScene(handoff.file, handoff.files)
+  }, [active, cfg.label, handoff, onHandoffDone, openScene, say])
 
   // ---------- ドラッグ＆ドロップ ----------
   const onDropFiles = useCallback(
     (files) => {
-      // シーン JSON は素材ではなく、読み込み画面へ回す
-      const scene = files.find((f) => /\.json$/i.test(f.name) || f.type === 'application/json')
+      // シーン(JSON / .piyo)は素材ではなく、読み込み画面へ回す
+      const scene =
+        files.find(isBundleFile) ?? files.find((f) => /\.json$/i.test(f.name) || f.type === 'application/json')
       if (scene) {
         openScene(
           scene,
@@ -752,6 +1056,14 @@ export default function App() {
         return
       }
       const audioFiles = files.filter((f) => kindOf(f) === 'audio')
+      if (sound) {
+        // 音声付加側: 音声は SE として再生ヘッドへ、動画と静止画はつなげて置く
+        const pictures = files.filter((f) => kindOf(f) === 'video' || kindOf(f) === 'image')
+        if (audioFiles.length) addAudioTracks(audioFiles, { role: 'se' })
+        else if (pictures.length) addVideoTracks(pictures)
+        else say('音声付加では動画・画像と音声ファイルを読み込めます', 'error')
+        return
+      }
       if (audioFiles.length) {
         addAudioTracks(audioFiles)
         return
@@ -773,7 +1085,7 @@ export default function App() {
       }
       addCellTrack(images)
     },
-    [addAudioTracks, addBackgroundTrack, addCellTrack, openScene, say],
+    [addAudioTracks, addBackgroundTrack, addCellTrack, addVideoTracks, openScene, say, sound],
   )
 
   // 覚えている保存先フォルダを起動時に拾う(許可が切れていても名前は出す)
@@ -798,14 +1110,14 @@ export default function App() {
       if (prev) return prev
       let stored = ''
       try {
-        stored = window.localStorage.getItem(NAME_KEY) || ''
+        stored = window.localStorage.getItem(cfg.nameKey) || ''
       } catch {
         /* noop */
       }
-      return stored || `PiyopiyoToonz-${fileStamp()}`
+      return stored || `${cfg.filePrefix}-${fileStamp()}`
     })
     setExportOpen(true)
-  }, [clock, say])
+  }, [cfg, clock, say])
 
   const toggleSimple = useCallback(() => {
     setSimple((v) => {
@@ -817,15 +1129,6 @@ export default function App() {
       }
       return next
     })
-  }, [])
-
-  const changeExportName = useCallback((name) => {
-    setExportName(name)
-    try {
-      window.localStorage.setItem(NAME_KEY, name)
-    } catch {
-      /* noop */
-    }
   }, [])
 
   const chooseExportDir = useCallback(async () => {
@@ -870,7 +1173,7 @@ export default function App() {
           tracks: tracksRef.current,
         },
         duration: dur,
-        fps: projectFps,
+        fps: exportFps,
         volume: muted ? 0 : volume,
         signal: ac.signal,
         onProgress: (done, total, label) =>
@@ -882,7 +1185,7 @@ export default function App() {
           }),
       })
       const ext = (blob.type || '').includes('webm') ? 'webm' : 'mp4'
-      setExportResult({ blob, filename: withExtension(exportName || `PiyopiyoToonz-${fileStamp()}`, ext) })
+      setExportResult({ blob, filename: withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, ext) })
       say('書き出しが完了しました。保存してください')
     } catch (e) {
       if (e?.name === 'AbortError') say('書き出しをキャンセルしました')
@@ -891,7 +1194,7 @@ export default function App() {
       setBusy(null)
       setFrozen(false)
     }
-  }, [clock, exportName, muted, projectFps, say, stage, volume])
+  }, [cfg.filePrefix, clock, exportFps, exportName, muted, say, stage, volume])
 
   /**
    * 覚えているフォルダ(あれば許可を取り直して)へ書き出す。
@@ -939,12 +1242,15 @@ export default function App() {
       tracks: tracksRef.current,
       stage,
       projectFps,
+      exportFps,
       muted,
       volume,
       name: exportName,
+      folders,
+      mode: cfg.id,
     })
     const blob = new Blob([sceneToText(doc)], { type: 'application/json' })
-    const filename = withExtension(exportName || `PiyopiyoToonz-${fileStamp()}`, SCENE_EXT)
+    const filename = withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, SCENE_EXT)
     try {
       const result = await saveOut(blob, filename, 'シーン')
       if (result.how === 'cancelled') return
@@ -953,46 +1259,89 @@ export default function App() {
     } catch (e) {
       say(e?.message || 'シーンを保存できませんでした', 'error')
     }
-  }, [exportName, muted, projectFps, saveOut, say, stage, volume])
+  }, [cfg, exportFps, exportName, folders, muted, projectFps, saveOut, say, stage, volume])
 
-  /** 素材が揃ったので、今の内容をシーンで置き換える(元に戻すで戻れる) */
-  const restoreSceneNow = useCallback(
-    async (pool) => {
-      const doc = sceneDoc
-      if (!doc) return
-      setSceneDoc(null)
-      setBusy({ label: 'シーンを復元中…', done: 0, total: doc.tracks.length })
-      try {
-        const out = await restoreScene(doc, pool, {
-          onProgress: (done, total, label) => setBusy({ label, done, total }),
-        })
-        if (out.tracks.length === 0) {
-          say('素材が見つからず、復元できませんでした', 'error')
-          return
-        }
-        // 中身がそっくり入れ替わるので、焼き溜めた撮影処理はここで手放す
-        clearFxCache()
-        commit(out.tracks)
-        setSelection([])
-        setStage(out.stage)
-        setProjectFps(out.projectFps)
-        setMuted(out.muted)
-        setVolume(out.volume)
-        if (out.name) changeExportName(out.name)
-        clock.stop()
-        say(
-          out.skipped.length > 0
-            ? `シーンを復元しました(素材が見つからない${out.skipped.length}レイヤーは飛ばしました)`
-            : 'シーンを復元しました',
-        )
-      } catch (e) {
-        say(e?.message || 'シーンを復元できませんでした', 'error')
-      } finally {
-        setBusy(null)
+  /**
+   * 素材ごと .piyo にまとめて保存する。
+   * 保存先はボタンを押したこの操作の中で先に決め、まとめ終わってから書く
+   * (まとめるのに時間がかかると、あとからでは保存ダイアログを開けないため)。
+   */
+  const saveBundle = useCallback(async () => {
+    const list = tracksRef.current
+    if (list.length === 0) {
+      say('保存するレイヤーがありません', 'error')
+      return
+    }
+    const { assets, missing } = trackSources(list)
+    if (missing.length > 0) {
+      say(`素材の実物が無いレイヤーがあるのでまとめられません: ${missing.join('、')}`, 'error')
+      return
+    }
+
+    let dir = exportDir
+    if (dir && !dir.granted) {
+      const ok = await reauthorizeDirectory(dir.handle)
+      if (ok) {
+        dir = { ...dir, granted: true }
+        setExportDir(dir)
+      } else {
+        dir = null
+        say('フォルダへの書き込みが許可されなかったので、ダウンロードにします')
       }
-    },
-    [changeExportName, clock, commit, say, sceneDoc],
-  )
+    }
+
+    const filename = withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, BUNDLE_EXT)
+    let target
+    try {
+      target = await pickSaveTarget(filename, {
+        dir: dir?.handle ?? null,
+        askWhere,
+        description: 'PiyopiyoToonz シーン(素材入り)',
+        mime: BUNDLE_MIME,
+        ext: BUNDLE_EXT,
+      })
+    } catch (e) {
+      say(e?.message || 'シーンを保存できませんでした', 'error')
+      return
+    }
+    if (target.how === 'cancelled') return
+
+    const doc = serializeScene({
+      tracks: list,
+      stage,
+      projectFps,
+      exportFps,
+      muted,
+      volume,
+      name: exportName,
+      folders,
+      mode: cfg.id,
+    })
+    const label = '素材をまとめています…(MB)'
+    setBusy({ label, done: 0, total: 0 })
+    try {
+      let shown = -1
+      const blob = await packBundle(doc, assets, {
+        onProgress: (read, total) => {
+          const done = Math.floor(read / 1e6)
+          if (done === shown) return
+          shown = done
+          setBusy({ label, done, total: Math.max(1, Math.ceil(total / 1e6)) })
+        },
+      })
+      setBusy({ label: '保存しています…' })
+      const result = await writeSaveTarget(target, blob)
+      if (result.how === 'cancelled') return
+      const mb = (blob.size / 1e6).toFixed(1)
+      if (result.how === 'folder') say(`📁 ${result.folder} に ${result.name}(${mb}MB)を保存しました`)
+      else say(`${result.name}(${mb}MB)を保存しました`)
+    } catch (e) {
+      await discardSaveTarget(target)
+      say(e?.message || 'シーンを保存できませんでした', 'error')
+    } finally {
+      setBusy(null)
+    }
+  }, [askWhere, cfg, exportDir, exportFps, exportName, folders, muted, projectFps, say, stage, volume])
 
   const view = useMemo(
     () => ({
@@ -1004,16 +1353,30 @@ export default function App() {
       muted,
       volume,
       frozen,
+      asleep: !active,
     }),
-    [stage, tracks, muted, volume, frozen],
+    [stage, tracks, muted, volume, frozen, active],
   )
 
   return (
-    <div className={'app' + (compact ? ' app--compact' : '')}>
+    <div className={'app app--' + cfg.id + (compact ? ' app--compact' : '')} hidden={!active}>
       <header className="topbar">
         <div className="topbar__brand">
           <h1>PiyopiyoToonz</h1>
-          <span className="topbar__sub">背景 × 透過セル連番 コンポジター</span>
+          <div className="modes" role="tablist" aria-label="アプリの切り替え">
+            {MODE_IDS.map((id) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={id === cfg.id}
+                className={id === cfg.id ? 'is-active' : ''}
+                onClick={() => onMode?.(id)}
+              >
+                {MODES[id].label}
+              </button>
+            ))}
+          </div>
+          <span className="topbar__sub">{cfg.sub}</span>
         </div>
         {notice && <div className={'notice notice--' + notice.tone}>{notice.message}</div>}
         <div className="topbar__actions">
@@ -1054,14 +1417,17 @@ export default function App() {
           )}
           <BackgroundPanel
             onAdd={addBackgroundTrack}
+            onAddVideos={addVideoTracks}
             stage={stage}
             onStage={(patch) => setStage((s) => ({ ...s, ...patch }))}
             simple={simple}
+            sound={sound}
           />
           <TrackPanel
             tracks={tracks}
             selection={selection}
             simple={simple}
+            sound={sound}
             onAddCells={addCellTrack}
             onAddAudio={addAudioTracks}
             onPatch={patchTrack}
@@ -1080,9 +1446,15 @@ export default function App() {
           />
           <ScenePanel
             onSave={saveScene}
+            onSaveBundle={saveBundle}
             onOpen={openScene}
             canSave={tracks.length > 0}
             simple={simple}
+            sound={sound}
+            folders={folders}
+            canRemember={canRememberFolders()}
+            onRememberFolder={rememberFolder}
+            onForgetFolder={forgetFolder}
           />
         </aside>
 
@@ -1102,6 +1474,7 @@ export default function App() {
             onGrabTrack={setGrabTrackId}
             onBeginEdit={pushHistory}
             onPatchTrack={patchTrackLive}
+            canGrab={!sound}
           />
           <Transport
             clock={clock}
@@ -1160,6 +1533,8 @@ export default function App() {
         <ExportDialog
           filename={exportName}
           onFilename={changeExportName}
+          fps={exportFps}
+          onFps={setExportFps}
           dir={exportDir}
           onPickDir={chooseExportDir}
           onForgetDir={dropExportDir}
@@ -1168,7 +1543,6 @@ export default function App() {
           meta={{
             width: stage.width,
             height: stage.height,
-            fps: projectFps,
             duration: Math.max(projectDurationSec(tracks), 0) || FALLBACK_DURATION,
             muted,
             ext: 'mp4',
@@ -1181,9 +1555,18 @@ export default function App() {
       {sceneDoc && !busy && (
         <SceneDialog
           scene={sceneDoc}
-          initialFiles={sceneFiles}
-          onRestore={restoreSceneNow}
-          onClose={() => setSceneDoc(null)}
+          pool={scenePool}
+          folders={folders}
+          canRemember={canRememberFolders()}
+          onAddFiles={addSceneFiles}
+          onScanFolders={async () => addSceneFiles((await scanFolders(sceneDoc)).files)}
+          onRememberFolder={rememberFolder}
+          onRestore={(pool) => applyScene(sceneDoc, pool)}
+          sound={sound}
+          onClose={() => {
+            setSceneDoc(null)
+            setScenePool(null)
+          }}
         />
       )}
 

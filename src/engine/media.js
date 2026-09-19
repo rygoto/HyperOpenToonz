@@ -3,7 +3,9 @@ const VIDEO_EXT = ['mp4', 'webm', 'mov', 'm4v', 'ogv', 'ogg']
 const AUDIO_EXT = ['wav', 'mp3', 'm4a', 'aac', 'flac', 'oga']
 
 export const BACKGROUND_ACCEPT = [...IMAGE_EXT, ...VIDEO_EXT].map((e) => '.' + e).join(',')
+export const IMAGE_ACCEPT = IMAGE_EXT.map((e) => '.' + e).join(',')
 export const AUDIO_ACCEPT = AUDIO_EXT.map((e) => '.' + e).join(',')
+export const VIDEO_ACCEPT = VIDEO_EXT.map((e) => '.' + e).join(',')
 
 export function extOf(name) {
   const i = name.lastIndexOf('.')
@@ -23,6 +25,27 @@ export function kindOf(file) {
   return 'unknown'
 }
 
+/**
+ * ファイルに「どこから来たか」を覚えさせる。
+ * File 自体は書き換えられないので、拡張プロパティとして持たせる。
+ * ドロップされたフォルダの中身や、フォルダ選択で読んだものはここに相対パスが入る。
+ */
+export function markPath(file, path) {
+  const clean = String(path ?? '').replace(/^[\\/]+/, '')
+  if (!file || !clean) return file
+  try {
+    Object.defineProperty(file, 'piyoPath', { value: clean, configurable: true })
+  } catch {
+    /* 覚えられなくてもファイル名で結び直せる */
+  }
+  return file
+}
+
+/** そのファイルの相対パス(分からなければファイル名) */
+export function filePath(file) {
+  return file?.piyoPath || file?.webkitRelativePath || file?.name || ''
+}
+
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 /** cut01_0002.png のような連番を数値順に並べる */
@@ -32,7 +55,8 @@ export function sortByName(files) {
 
 async function walkEntry(entry, out) {
   if (entry.isFile) {
-    out.push(await new Promise((res, rej) => entry.file(res, rej)))
+    const file = await new Promise((res, rej) => entry.file(res, rej))
+    out.push(markPath(file, entry.fullPath))
     return
   }
   if (!entry.isDirectory) return
@@ -165,6 +189,9 @@ export async function loadCellSequence(fileList, onProgress) {
   return {
     frames,
     names: files.map((f) => f.name),
+    paths: files.map(filePath),
+    // 素材ごと保存するときに使う実物(names と同じ順)
+    sources: files,
     width: frames[0].width,
     height: frames[0].height,
   }

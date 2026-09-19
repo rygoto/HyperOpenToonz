@@ -10,7 +10,22 @@ import { canPickDirectory, canPickSaveFile, isIPadLike } from '../engine/saveFil
  *   共有シート           … iPad / iPhone
  *   ダウンロード         … それ以外(ブラウザの既定の場所)
  */
-export default function ExportDialog({ filename, onFilename, dir, onPickDir, onForgetDir, askWhere, onAskWhere, meta, onStart, onClose }) {
+const FPS_PRESETS = [12, 15, 24, 25, 30, 50, 60]
+
+export default function ExportDialog({
+  filename,
+  onFilename,
+  fps,
+  onFps,
+  dir,
+  onPickDir,
+  onForgetDir,
+  askWhere,
+  onAskWhere,
+  meta,
+  onStart,
+  onClose,
+}) {
   const [error, setError] = useState(null)
   const folders = canPickDirectory()
   const picker = canPickSaveFile()
@@ -77,8 +92,35 @@ export default function ExportDialog({ filename, onFilename, dir, onPickDir, onF
           )}
         </div>
 
+        <div className="dialog__row">
+          <label className="field">
+            出力 fps
+            <span className="field__input">
+              <input
+                type="number"
+                min="1"
+                max="120"
+                step="1"
+                value={fps}
+                onChange={(e) => {
+                  const v = Math.round(Number(e.target.value))
+                  if (Number.isFinite(v) && v > 0) onFps(Math.min(120, v))
+                }}
+              />
+              <em>fps</em>
+            </span>
+          </label>
+          <div className="presets">
+            {FPS_PRESETS.map((f) => (
+              <button key={f} className={fps === f ? 'is-active' : ''} onClick={() => onFps(f)}>
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <p className="hint dialog__meta mono">
-          {meta.width}×{meta.height} / {meta.fps}fps / {meta.duration.toFixed(2)}秒
+          {meta.width}×{meta.height} / {fps}fps / {meta.duration.toFixed(2)}秒
           {meta.muted ? ' / 音声なし' : ''}
         </p>
 

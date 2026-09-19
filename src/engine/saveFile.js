@@ -48,7 +48,7 @@ function idb() {
   })
 }
 
-async function idbPut(key, value) {
+export async function idbPut(key, value) {
   const db = await idb()
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite')
@@ -59,7 +59,7 @@ async function idbPut(key, value) {
   db.close()
 }
 
-async function idbGet(key) {
+export async function idbGet(key) {
   const db = await idb()
   const value = await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly')
@@ -71,7 +71,7 @@ async function idbGet(key) {
   return value
 }
 
-async function idbDelete(key) {
+export async function idbDelete(key) {
   const db = await idb()
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite')
@@ -213,6 +213,67 @@ export async function saveBlob(blob, filename, { dir = null, askWhere = false, d
   a.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 8000)
   return { how: 'downloaded', name }
+}
+
+/**
+ * 時間のかかる書き出しの前に、保存先だけ先に決めておく。
+ * 保存ダイアログやフォルダへの書き込みは「ボタンを押した直後」でないと開けないので、
+ * ボタンの操作の中でこれを呼び、中身ができたら writeSaveTarget に渡す。
+ *   mime / ext … 保存ダイアログに出す種類
+ * 返り値の how が 'cancelled' なら、何もせずにやめる。
+ */
+export async function pickSaveTarget(filename, { dir = null, askWhere = false, description = 'ファイル', mime, ext } = {}) {
+  const name = sanitizeFilename(filename, 'PiyopiyoToonz')
+
+  if (dir) {
+    try {
+      const unique = await uniqueName(dir, name)
+      const handle = await dir.getFileHandle(unique, { create: true })
+      return { how: 'folder', handle, dir, name: unique, folder: dir.name }
+    } catch (e) {
+      if (e?.name !== 'NotAllowedError' && e?.name !== 'SecurityError') throw e
+      // 権限切れ。下のダイアログ / ダウンロードへ落とす
+    }
+  }
+
+  if (askWhere && canPickSaveFile()) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description, accept: { [mime]: ['.' + ext] } }],
+      })
+      return { how: 'picker', handle, name: handle.name }
+    } catch (e) {
+      if (e?.name === 'AbortError') return { how: 'cancelled' }
+      throw e
+    }
+  }
+
+  return { how: 'later', name }
+}
+
+/** pickSaveTarget で決めた先へ書く。先が決まっていなければダウンロード(iPad は共有シート) */
+export async function writeSaveTarget(target, blob) {
+  if (!target.handle) return saveBlob(blob, target.name)
+  const stream = await target.handle.createWritable()
+  try {
+    await stream.write(blob)
+    await stream.close()
+  } catch (e) {
+    await stream.abort?.().catch(() => {})
+    throw e
+  }
+  return { how: target.how, name: target.name, folder: target.folder }
+}
+
+/** 書く前にやめたとき、フォルダに先に作った空のファイルを片付ける */
+export async function discardSaveTarget(target) {
+  if (target?.how !== 'folder' || !target.dir) return
+  try {
+    await target.dir.removeEntry(target.name)
+  } catch {
+    /* 消せなくても害は無い */
+  }
 }
 
 export function fileStamp(date = new Date()) {

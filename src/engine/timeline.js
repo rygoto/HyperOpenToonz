@@ -148,6 +148,22 @@ export function repeatToFill(track, endSec) {
   return replaceClips(track, clips)
 }
 
+/** endSec より後ろを切り落とす(BGM を繰り返したとき、動画の尻からはみ出さないように) */
+export function trimTrackTo(track, endSec) {
+  const u = unitsPerSecond(track)
+  const min = minUnits(track)
+  const clips = []
+  for (const c of track.clips) {
+    if (c.start >= endSec - 1e-6) continue
+    const len = Math.min(c.len, (endSec - c.start) * u)
+    if (len < min) continue
+    clips.push(len === c.len ? c : { ...c, len })
+  }
+  return clips.length === track.clips.length && clips.every((c, i) => c === track.clips[i])
+    ? track
+    : replaceClips(track, clips)
+}
+
 /** 貼り付け: 相対位置を保ったまま at を先頭にして並べ直す */
 export function offsetClipsTo(clips, at) {
   if (clips.length === 0) return []
