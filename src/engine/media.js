@@ -41,6 +41,20 @@ export function markPath(file, path) {
   return file
 }
 
+/**
+ * ファイルに実物のハンドル(FileSystemFileHandle)を持たせる。
+ * シーンを開いたとき、そのファイルと同じフォルダへ保存するのに使う。
+ */
+export function markHandle(file, handle) {
+  if (!file || !handle) return file
+  try {
+    Object.defineProperty(file, 'piyoHandle', { value: handle, configurable: true })
+  } catch {
+    /* 持たせられなくても開くことはできる */
+  }
+  return file
+}
+
 /** そのファイルの相対パス(分からなければファイル名) */
 export function filePath(file) {
   return file?.piyoPath || file?.webkitRelativePath || file?.name || ''
@@ -71,10 +85,10 @@ async function walkEntry(entry, out) {
 
 /** ドロップされた項目からファイルを取り出す(フォルダは再帰的に展開) */
 export async function filesFromDataTransfer(dt) {
-  // items は同期的に読まないと無効化されるため先に entry を確保する
-  const entries = [...(dt.items ?? [])]
-    .map((i) => i.webkitGetAsEntry?.())
-    .filter(Boolean)
+  // items は同期的に読まないと無効化されるため先に entry(とハンドル)を確保する
+  const items = [...(dt.items ?? [])].filter((i) => i.kind === 'file')
+  const handles = items.map((i) => i.getAsFileSystemHandle?.().catch(() => null) ?? null)
+  const entries = items.map((i) => i.webkitGetAsEntry?.()).filter(Boolean)
   if (entries.length === 0) return [...dt.files]
 
   const out = []
@@ -83,7 +97,15 @@ export async function filesFromDataTransfer(dt) {
   } catch {
     return [...dt.files]
   }
-  return out.length > 0 ? out : [...dt.files]
+  if (out.length === 0) return [...dt.files]
+
+  // じかにドロップされたファイルには、ハンドルも持たせる(フォルダの中身は要らない)
+  for (const h of await Promise.all(handles)) {
+    if (h?.kind !== 'file') continue
+    const file = out.find((f) => filePath(f) === h.name)
+    markHandle(file, h)
+  }
+  return out
 }
 
 function waitEvent(el, event, errorLabel) {

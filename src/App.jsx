@@ -45,6 +45,7 @@ import {
 } from './engine/assetLibrary.js'
 import { BUNDLE_EXT, BUNDLE_MIME, isBundleFile, packBundle, trackSources, unpackBundle } from './engine/bundle.js'
 import {
+  directoryOfFile,
   discardSaveTarget,
   fileStamp,
   forgetExportDirectory,
@@ -158,6 +159,8 @@ export default function App({
   const [exportName, setExportName] = useState('')
   const [exportDir, setExportDir] = useState(null)
   const [askWhere, setAskWhere] = useState(false)
+  // 開いたシーンのファイル。次の保存はこれと同じフォルダへ(保存先のフォルダが決まったら消す)
+  const [sceneHandle, setSceneHandle] = useState(null)
 
   // タイムラインの高さ(null = CSS の既定値)
   const [tlHeight, setTlHeight] = useState(loadSplit)
@@ -1015,6 +1018,7 @@ export default function App({
       clock.pause()
       setExportOpen(false)
       setAssetsOpen(false)
+      setSceneHandle(file.piyoHandle ?? null)
 
       // 中に入っていた素材を先に、一緒に渡されたものを後に(同じパスなら後勝ち)
       const pool = makePool([...bundled, ...withFiles])
@@ -1136,6 +1140,7 @@ export default function App({
     const picked = await pickExportDirectory()
     if (picked) {
       setExportDir(picked)
+      setSceneHandle(null)
       setAskWhere(false)
     }
   }, [])
@@ -1144,6 +1149,37 @@ export default function App({
     await forgetExportDirectory()
     setExportDir(null)
   }, [])
+
+  /**
+   * 保存に使うフォルダ({ handle, name, granted } か null)を決める。
+   * シーンを開いたあとは、覚えていたフォルダではなくそのシーンと同じフォルダにする。
+   * 許可の取り直しやフォルダ選択があるので、ボタンを押したその操作の中から呼ぶこと。
+   * やめたときは AbortError を投げる。
+   */
+  const resolveSaveDir = useCallback(async () => {
+    if (sceneHandle) {
+      const found = await directoryOfFile(sceneHandle, exportDir?.granted ? exportDir.handle : null)
+      if (found) {
+        setExportDir(found)
+        setSceneHandle(null)
+        setAskWhere(false)
+        return found
+      }
+    }
+    let dir = exportDir
+    // 前に選んだフォルダは、保存を押したこの操作の中で許可を取り直す
+    if (dir && !dir.granted) {
+      const ok = await reauthorizeDirectory(dir.handle)
+      if (ok) {
+        dir = { ...dir, granted: true }
+        setExportDir(dir)
+      } else {
+        dir = null
+        say('フォルダへの書き込みが許可されなかったので、ダウンロードにします')
+      }
+    }
+    return dir
+  }, [exportDir, sceneHandle, say])
 
   const startExport = useCallback(async () => {
     const duration = projectDurationSec(tracksRef.current)
@@ -1203,21 +1239,16 @@ export default function App({
    */
   const saveOut = useCallback(
     async (blob, filename, description) => {
-      let dir = exportDir
-      // 前に選んだフォルダは、保存を押したこの操作の中で許可を取り直す
-      if (dir && !dir.granted) {
-        const ok = await reauthorizeDirectory(dir.handle)
-        if (ok) {
-          dir = { ...dir, granted: true }
-          setExportDir(dir)
-        } else {
-          dir = null
-          say('フォルダへの書き込みが許可されなかったので、ダウンロードにします')
-        }
+      let dir
+      try {
+        dir = await resolveSaveDir()
+      } catch (e) {
+        if (e?.name === 'AbortError') return { how: 'cancelled' }
+        throw e
       }
       return saveBlob(blob, filename, { dir: dir?.handle ?? null, askWhere, description })
     },
-    [askWhere, exportDir, say],
+    [askWhere, resolveSaveDir],
   )
 
   /**
@@ -1299,21 +1330,10 @@ export default function App({
       return
     }
 
-    let dir = exportDir
-    if (dir && !dir.granted) {
-      const ok = await reauthorizeDirectory(dir.handle)
-      if (ok) {
-        dir = { ...dir, granted: true }
-        setExportDir(dir)
-      } else {
-        dir = null
-        say('フォルダへの書き込みが許可されなかったので、ダウンロードにします')
-      }
-    }
-
     const filename = withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, BUNDLE_EXT)
     let target
     try {
+      const dir = await resolveSaveDir()
       target = await pickSaveTarget(filename, {
         dir: dir?.handle ?? null,
         askWhere,
@@ -1322,7 +1342,7 @@ export default function App({
         ext: BUNDLE_EXT,
       })
     } catch (e) {
-      say(e?.message || 'シーンを保存できませんでした', 'error')
+      if (e?.name !== 'AbortError') say(e?.message || 'シーンを保存できませんでした', 'error')
       return
     }
     if (target.how === 'cancelled') return
@@ -1360,7 +1380,7 @@ export default function App({
     } finally {
       setBusy(null)
     }
-  }, [askWhere, cfg, exportDir, exportFps, exportName, folders, muted, projectFps, reportSaved, say, stage, volume])
+  }, [askWhere, cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, resolveSaveDir, say, stage, volume])
 
   const view = useMemo(
     () => ({
@@ -1477,6 +1497,8 @@ export default function App({
           />
           <SaveTargetPanel
             dir={exportDir}
+            sceneFile={sceneHandle?.name}
+            onForgetSceneFile={() => setSceneHandle(null)}
             onPickDir={chooseExportDir}
             onForgetDir={dropExportDir}
             askWhere={askWhere}
@@ -1562,7 +1584,7 @@ export default function App({
           onFilename={changeExportName}
           fps={exportFps}
           onFps={setExportFps}
-          target={saveTargetLabel(exportDir, askWhere)}
+          target={saveTargetLabel(exportDir, askWhere, sceneHandle?.name)}
           meta={{
             width: stage.width,
             height: stage.height,
@@ -1619,10 +1641,12 @@ export default function App({
           <div className="overlay__box">
             <p>書き出しが完了しました</p>
             <p className="hint">{exportResult.filename}</p>
-            {exportDir && <p className="hint">保存先: 📁 {exportDir.name}</p>}
+            {(exportDir || sceneHandle) && (
+              <p className="hint">保存先: {saveTargetLabel(exportDir, askWhere, sceneHandle?.name)}</p>
+            )}
             <div className="row">
               <button className="primary wide" onClick={saveExport}>
-                {exportDir ? 'フォルダに保存' : '保存 / 共有'}
+                {exportDir || sceneHandle ? 'フォルダに保存' : '保存 / 共有'}
               </button>
               <button className="wide" onClick={() => setExportResult(null)}>
                 閉じる

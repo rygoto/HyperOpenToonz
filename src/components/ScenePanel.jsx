@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import { markHandle } from '../engine/media.js'
 
 /**
  * シーン(プロジェクト)の保存と読み込み。
@@ -19,6 +20,31 @@ export default function ScenePanel({
   onForgetFolder,
 }) {
   const input = useRef(null)
+
+  // ファイルの場所(ハンドル)まで取れるときはそちらで開く。同じフォルダへ保存するのに使う
+  const open = async () => {
+    if (!('showOpenFilePicker' in window)) {
+      input.current.click()
+      return
+    }
+    let file
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        id: 'piyopiyo-scene',
+        types: [
+          {
+            description: 'PiyopiyoToonz シーン',
+            accept: { 'application/zip': ['.piyo'], 'application/json': ['.json'] },
+          },
+        ],
+      })
+      file = markHandle(await handle.getFile(), handle)
+    } catch (e) {
+      if (e?.name !== 'AbortError') input.current.click()
+      return
+    }
+    onOpen(file)
+  }
 
   return (
     <section className="panel">
@@ -42,7 +68,7 @@ export default function ScenePanel({
       <button className="wide" disabled={!canSave} onClick={onSave}>
         💾 設定だけ保存（JSON）
       </button>
-      <button className="wide" onClick={() => input.current.click()}>
+      <button className="wide" onClick={open}>
         📂 シーンを開く（.piyo / JSON）
       </button>
 

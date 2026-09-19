@@ -102,6 +102,40 @@ export async function pickExportDirectory() {
 }
 
 /**
+ * 開いたファイル(FileSystemFileHandle)と同じフォルダを保存先にする。
+ * ブラウザはファイルから親フォルダをたどらせてくれないので、
+ *   1. 覚えているフォルダ(許可済み)の中にあれば、そこから下って黙って取る
+ *   2. 無ければフォルダ選択をそのファイルの場所で開き、「選択」を押してもらう
+ * 取れたフォルダは次回以降の保存先として覚える。ユーザー操作の中から呼ぶこと。
+ * やめたときは AbortError を投げる。
+ */
+export async function directoryOfFile(fileHandle, known = null) {
+  if (!canPickDirectory() || !fileHandle) return null
+  let handle = null
+  if (known) {
+    try {
+      const path = await known.resolve(fileHandle)
+      if (path) {
+        handle = known
+        for (const name of path.slice(0, -1)) handle = await handle.getDirectoryHandle(name)
+      }
+    } catch {
+      handle = null
+    }
+  }
+  if (!handle) {
+    // id を付けると前に選んだ場所が startIn より優先されるので付けない
+    handle = await window.showDirectoryPicker({ startIn: fileHandle, mode: 'readwrite' })
+  }
+  try {
+    await idbPut(DIR_KEY, handle)
+  } catch {
+    /* 覚えられなくても今回の保存には使える */
+  }
+  return { handle, name: handle.name, granted: true }
+}
+
+/**
  * 前に選んだフォルダを取り出す。{ handle, name, granted } か null。
  * granted が false のときは、ユーザー操作の中で許可を取り直す必要がある。
  */
