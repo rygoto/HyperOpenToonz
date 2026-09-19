@@ -1,7 +1,11 @@
 import {
+  ALL_FORMATS,
   AudioBufferSource,
+  BlobSource,
   BufferTarget,
+  CanvasSink,
   CanvasSource,
+  Input,
   Mp4OutputFormat,
   Output,
   QUALITY_HIGH,
@@ -24,7 +28,10 @@ function throwIfAborted(signal) {
   }
 }
 
-/** 背景動画を指定時刻へシークして、そのフレームが描ける状態にする */
+/**
+ * 背景動画を指定時刻へシークして、そのフレームが描ける状態にする。
+ * 書き出しでは下の frameReaders を優先し、これは素材の実物が無いときの予備。
+ */
 export function seekVideo(el, time) {
   return new Promise((resolve) => {
     if (!el || typeof el.currentTime !== 'number') {
@@ -45,7 +52,16 @@ export function seekVideo(el, time) {
       el.removeEventListener('error', done)
       resolve()
     }
-    el.addEventListener('seeked', done)
+    const presented = () => {
+      // seeked の時点ではまだ新しい絵が出ていないことがあるので、表示されるまで待つ
+      if (typeof el.requestVideoFrameCallback === 'function') {
+        el.requestVideoFrameCallback(() => done())
+        window.setTimeout(done, 1000)
+      } else {
+        done()
+      }
+    }
+    el.addEventListener('seeked', presented, { once: true })
     el.addEventListener('error', done)
     try {
       el.pause()
@@ -54,8 +70,80 @@ export function seekVideo(el, time) {
       done()
       return
     }
-    window.setTimeout(done, 500)
+    // キーフレームの少ない動画は後ろほどシークが遅い。諦めるのは本当に止まったときだけ
+    window.setTimeout(done, 10000)
   })
+}
+
+/*
+ * 書き出しのコマは <video> をシークせず、mediabunny で素材をデコードして取る。
+ * <video> のシークは seeked が来ても絵が間に合っていなかったり、キーフレームが1つしかない
+ * 動画だと後半ほど遅くなって待ちきれなかったりして、コマが止まる・真っ黒になる(ちらつく)。
+ * デコーダを直接使えば、狙った時刻のコマが必ず取れて、頭から順に読むので速い。
+ */
+
+// 素材のコマの時刻は 1/24 秒などから僅かにずれて入っていることがあるので、少しだけ後ろを見る
+const FRAME_EPSILON = 0.002
+
+/** 1本の背景動画から、times[i](null はそのコマで使わない)に当たる絵を順に取り出す */
+async function openFrameReader(track, times) {
+  const file = track.sources?.[0]
+  if (!file) return null
+  let input = null
+  try {
+    input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS })
+    const video = await input.getPrimaryVideoTrack()
+    if (!video || !(await video.canDecode())) {
+      input.dispose()
+      return null
+    }
+    const sink = new CanvasSink(video, { poolSize: 0 })
+    const frames = sink.canvasesAtTimestamps(times.filter((t) => t != null))
+    let last = null
+    return {
+      /** i コマ目の絵(そのコマで使わない動画なら直前のまま) */
+      async at(i) {
+        if (times[i] == null) return last
+        const { value } = await frames.next()
+        if (value?.canvas) last = value.canvas
+        return last
+      },
+      async close() {
+        await frames.return?.()
+        input.dispose()
+      },
+    }
+  } catch {
+    input?.dispose()
+    return null
+  }
+}
+
+/** 書き出す全コマぶん、背景動画ごとの読み手を用意する(用意できない動画は <video> のシークに任せる) */
+async function frameReaders(view, total, dt, duration) {
+  const readers = new Map()
+  for (const track of view.tracks) {
+    if (track.type !== 'bg' || track.kind !== 'video' || !track.el) continue
+    const times = []
+    for (let i = 0; i < total; i++) {
+      const t = Math.min(duration, i * dt)
+      const clip = activeClip(track, t)
+      times.push(clip ? bgSourceTime(track, clip, t) + FRAME_EPSILON : null)
+    }
+    const reader = await openFrameReader(track, times)
+    if (reader) readers.set(track.id, reader)
+  }
+  return readers
+}
+
+async function closeReaders(readers) {
+  for (const r of readers.values()) {
+    try {
+      await r.close()
+    } catch {
+      /* 片付けに失敗しても書き出した結果には響かない */
+    }
+  }
 }
 
 export function pickRecorderMime() {
@@ -86,13 +174,25 @@ async function prepareCanvas(view) {
   return { canvas, ctx, exportView }
 }
 
-async function paintFrame(ctx, exportView, time) {
+/** i コマ目(time 秒)を描く。デコードした絵がある動画は、video 要素の代わりにそれを使う */
+async function paintFrame(ctx, exportView, time, i, readers) {
+  const tracks = []
   for (const track of exportView.tracks) {
-    if (track.type !== 'bg' || track.kind !== 'video' || !track.el) continue
+    if (track.type !== 'bg' || track.kind !== 'video' || !track.el) {
+      tracks.push(track)
+      continue
+    }
+    const reader = readers?.get(track.id)
+    if (reader) {
+      const frame = await reader.at(i)
+      tracks.push(frame ? { ...track, el: frame } : track)
+      continue
+    }
     const clip = activeClip(track, time)
     if (clip) await seekVideo(track.el, bgSourceTime(track, clip, time))
+    tracks.push(track)
   }
-  composite(ctx, exportView, time)
+  composite(ctx, { ...exportView, tracks }, time)
 }
 
 async function mixAudio(view, duration, volume) {
@@ -143,14 +243,19 @@ async function exportWithWebCodecs({ view, duration, fps, volume, signal, onProg
 
   await output.start()
 
-  for (let i = 0; i < total; i++) {
-    throwIfAborted(signal)
-    const t = Math.min(duration, i * dt)
-    await paintFrame(ctx, exportView, t)
-    await videoSource.add(t, dt, { keyFrame: i % (fps * 2) === 0 })
-    if (i % 2 === 0 || i === total - 1) {
-      onProgress?.(i + 1, total, '映像をエンコード中…')
+  const readers = await frameReaders(exportView, total, dt, duration)
+  try {
+    for (let i = 0; i < total; i++) {
+      throwIfAborted(signal)
+      const t = Math.min(duration, i * dt)
+      await paintFrame(ctx, exportView, t, i, readers)
+      await videoSource.add(t, dt, { keyFrame: i % (fps * 2) === 0 })
+      if (i % 2 === 0 || i === total - 1) {
+        onProgress?.(i + 1, total, '映像をエンコード中…')
+      }
     }
+  } finally {
+    await closeReaders(readers)
   }
 
   if (audioSource && audio) {
@@ -175,8 +280,9 @@ async function exportWithRecorder({ view, duration, fps, volume, signal, onProgr
   const total = Math.max(1, Math.round(duration * fps))
   const dt = 1 / fps
   const audio = await mixAudio(view, duration, volume)
+  const readers = await frameReaders(exportView, total, dt, duration)
 
-  await paintFrame(ctx, exportView, 0)
+  await paintFrame(ctx, exportView, 0, 0, readers)
 
   const stream = canvas.captureStream(0)
   const videoTrack = stream.getVideoTracks()[0]
@@ -221,7 +327,8 @@ async function exportWithRecorder({ view, duration, fps, volume, signal, onProgr
     for (let i = 0; i < total; i++) {
       throwIfAborted(signal)
       const t = Math.min(duration, i * dt)
-      await paintFrame(ctx, exportView, t)
+      // 0 コマ目は録り始める前に描いてある
+      if (i > 0) await paintFrame(ctx, exportView, t, i, readers)
       videoTrack?.requestFrame?.()
       onProgress?.(i + 1, total, '映像を録画中…')
       if (canRequest) {
@@ -239,6 +346,7 @@ async function exportWithRecorder({ view, duration, fps, volume, signal, onProgr
     }
   } finally {
     if (rec.state !== 'inactive') rec.stop()
+    await closeReaders(readers)
     await audioCtx?.close?.()
     stream.getTracks().forEach((tr) => tr.stop())
   }

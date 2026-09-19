@@ -29,6 +29,13 @@ export function withExtension(base, ext) {
 
 /* ---------- 保存先フォルダの記憶 ---------- */
 
+/**
+ * 覚えているフォルダへ書けなくなったか。
+ * 権限切れのほか、フォルダを動かした / 名前を変えた / 消したときは NotFoundError になる。
+ */
+const folderUnusable = (e) =>
+  e?.name === 'NotAllowedError' || e?.name === 'SecurityError' || e?.name === 'NotFoundError'
+
 const DB_NAME = 'piyopiyo'
 const STORE = 'handles'
 const DIR_KEY = 'exportDir'
@@ -164,15 +171,14 @@ async function writeToDirectory(dir, blob, filename) {
 export async function saveBlob(blob, filename, { dir = null, askWhere = false, description = '動画' } = {}) {
   const name = sanitizeFilename(filename, 'PiyopiyoToonz.mp4')
 
+  let folderLost = false
   if (dir) {
     try {
       return await writeToDirectory(dir, blob, name)
     } catch (e) {
-      if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') {
-        // 権限切れ。下のダイアログ / ダウンロードへ落とす
-      } else {
-        throw e
-      }
+      if (!folderUnusable(e)) throw e
+      // 下のダイアログ / ダウンロードへ落とす
+      folderLost = true
     }
   }
 
@@ -186,7 +192,7 @@ export async function saveBlob(blob, filename, { dir = null, askWhere = false, d
       const stream = await handle.createWritable()
       await stream.write(blob)
       await stream.close()
-      return { how: 'picker', name: handle.name }
+      return { how: 'picker', name: handle.name, folderLost }
     } catch (e) {
       if (e?.name === 'AbortError') return { how: 'cancelled' }
       throw e
@@ -197,7 +203,7 @@ export async function saveBlob(blob, filename, { dir = null, askWhere = false, d
   if (isIPadLike() && navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: name })
-      return { how: 'shared', name }
+      return { how: 'shared', name, folderLost }
     } catch (e) {
       if (e?.name === 'AbortError') return { how: 'cancelled' }
     }
@@ -212,7 +218,7 @@ export async function saveBlob(blob, filename, { dir = null, askWhere = false, d
   a.click()
   a.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 8000)
-  return { how: 'downloaded', name }
+  return { how: 'downloaded', name, folderLost }
 }
 
 /**
@@ -221,18 +227,21 @@ export async function saveBlob(blob, filename, { dir = null, askWhere = false, d
  * ボタンの操作の中でこれを呼び、中身ができたら writeSaveTarget に渡す。
  *   mime / ext … 保存ダイアログに出す種類
  * 返り値の how が 'cancelled' なら、何もせずにやめる。
+ * 覚えているフォルダが使えなかったときは folderLost が true になる(ダイアログ / ダウンロードに落ちる)。
  */
 export async function pickSaveTarget(filename, { dir = null, askWhere = false, description = 'ファイル', mime, ext } = {}) {
   const name = sanitizeFilename(filename, 'PiyopiyoToonz')
 
+  let folderLost = false
   if (dir) {
     try {
       const unique = await uniqueName(dir, name)
       const handle = await dir.getFileHandle(unique, { create: true })
       return { how: 'folder', handle, dir, name: unique, folder: dir.name }
     } catch (e) {
-      if (e?.name !== 'NotAllowedError' && e?.name !== 'SecurityError') throw e
-      // 権限切れ。下のダイアログ / ダウンロードへ落とす
+      if (!folderUnusable(e)) throw e
+      // 下のダイアログ / ダウンロードへ落とす
+      folderLost = true
     }
   }
 
@@ -242,19 +251,19 @@ export async function pickSaveTarget(filename, { dir = null, askWhere = false, d
         suggestedName: name,
         types: [{ description, accept: { [mime]: ['.' + ext] } }],
       })
-      return { how: 'picker', handle, name: handle.name }
+      return { how: 'picker', handle, name: handle.name, folderLost }
     } catch (e) {
       if (e?.name === 'AbortError') return { how: 'cancelled' }
       throw e
     }
   }
 
-  return { how: 'later', name }
+  return { how: 'later', name, folderLost }
 }
 
 /** pickSaveTarget で決めた先へ書く。先が決まっていなければダウンロード(iPad は共有シート) */
 export async function writeSaveTarget(target, blob) {
-  if (!target.handle) return saveBlob(blob, target.name)
+  if (!target.handle) return { ...(await saveBlob(blob, target.name)), folderLost: target.folderLost }
   const stream = await target.handle.createWritable()
   try {
     await stream.write(blob)

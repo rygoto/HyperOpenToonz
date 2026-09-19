@@ -845,3 +845,21 @@ test('素材ごと保存: .piyo にまとめて開き直すと、シーンと素
   // 実物を持たないレイヤーがあればまとめない
   assert.deepEqual(trackSources([bgTrack({ name: 'x', fileName: 'x.png' })]).missing, ['x'])
 })
+
+test('覚えていた保存先フォルダが消えていたら、ダイアログ / ダウンロードに落として知らせる', async () => {
+  const { pickSaveTarget } = await import('../src/engine/saveFile.js')
+  const gone = {
+    name: 'out',
+    getFileHandle: async () => {
+      throw new DOMException('A requested file or directory could not be found', 'NotFoundError')
+    },
+  }
+  const target = await pickSaveTarget('a.piyo', { dir: gone, mime: 'application/zip', ext: 'piyo' })
+  assert.equal(target.how, 'later')
+  assert.equal(target.folderLost, true)
+  assert.equal(target.name, 'a.piyo')
+
+  // それ以外の失敗は隠さない
+  const broken = { name: 'out', getFileHandle: async () => { throw new DOMException('disk', 'QuotaExceededError') } }
+  await assert.rejects(pickSaveTarget('a.piyo', { dir: broken }), { name: 'QuotaExceededError' })
+})
