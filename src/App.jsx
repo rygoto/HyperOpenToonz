@@ -22,6 +22,7 @@ import BackgroundPanel from './components/BackgroundPanel.jsx'
 import TrackPanel from './components/TrackPanel.jsx'
 import ExportDialog from './components/ExportDialog.jsx'
 import ScenePanel from './components/ScenePanel.jsx'
+import SaveTargetPanel, { saveTargetLabel } from './components/SaveTargetPanel.jsx'
 import SceneDialog from './components/SceneDialog.jsx'
 import { exportComposedVideo } from './engine/exportVideo.js'
 import { clearFxCache, defaultFx } from './engine/fx.js'
@@ -1219,18 +1220,39 @@ export default function App({
     [askWhere, exportDir, say],
   )
 
+  /**
+   * 保存できたことを知らせる。size はファイル名の後ろに添える文字(「(1.2MB)」など)。
+   * 覚えていた保存先フォルダが見つからなかったときは、そのフォルダを忘れてそう伝える。
+   */
+  const reportSaved = useCallback(
+    (result, size = '') => {
+      if (result.how === 'folder') {
+        say(`📁 ${result.folder} に ${result.name}${size} を保存しました`)
+        return
+      }
+      if (result.folderLost) {
+        setExportDir(null)
+        forgetExportDirectory()
+        const where = result.how === 'downloaded' ? 'ダウンロードに' : ''
+        say(`保存先フォルダが見つからなかった(動かしたか消した?)ので、${result.name}${size} を${where}保存しました。保存先は選び直してください`)
+        return
+      }
+      say(`${result.name}${size} を保存しました`)
+    },
+    [say],
+  )
+
   const saveExport = useCallback(async () => {
     if (!exportResult) return
     try {
       const result = await saveOut(exportResult.blob, exportResult.filename, '動画')
       if (result.how === 'cancelled') return
       setExportResult(null)
-      if (result.how === 'folder') say(`📁 ${result.folder} に ${result.name} を保存しました`)
-      else say(`${result.name} を保存しました`)
+      reportSaved(result)
     } catch (e) {
       say(e?.message || '保存できませんでした', 'error')
     }
-  }, [exportResult, saveOut, say])
+  }, [exportResult, reportSaved, saveOut, say])
 
   // ---------- シーンの保存と復元 ----------
   const saveScene = useCallback(async () => {
@@ -1254,12 +1276,11 @@ export default function App({
     try {
       const result = await saveOut(blob, filename, 'シーン')
       if (result.how === 'cancelled') return
-      if (result.how === 'folder') say(`📁 ${result.folder} に ${result.name} を保存しました`)
-      else say(`${result.name} を保存しました`)
+      reportSaved(result)
     } catch (e) {
       say(e?.message || 'シーンを保存できませんでした', 'error')
     }
-  }, [cfg, exportFps, exportName, folders, muted, projectFps, saveOut, say, stage, volume])
+  }, [cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, saveOut, say, stage, volume])
 
   /**
    * 素材ごと .piyo にまとめて保存する。
@@ -1332,16 +1353,14 @@ export default function App({
       setBusy({ label: '保存しています…' })
       const result = await writeSaveTarget(target, blob)
       if (result.how === 'cancelled') return
-      const mb = (blob.size / 1e6).toFixed(1)
-      if (result.how === 'folder') say(`📁 ${result.folder} に ${result.name}(${mb}MB)を保存しました`)
-      else say(`${result.name}(${mb}MB)を保存しました`)
+      reportSaved(result, `(${(blob.size / 1e6).toFixed(1)}MB)`)
     } catch (e) {
       await discardSaveTarget(target)
       say(e?.message || 'シーンを保存できませんでした', 'error')
     } finally {
       setBusy(null)
     }
-  }, [askWhere, cfg, exportDir, exportFps, exportName, folders, muted, projectFps, say, stage, volume])
+  }, [askWhere, cfg, exportDir, exportFps, exportName, folders, muted, projectFps, reportSaved, say, stage, volume])
 
   const view = useMemo(
     () => ({
@@ -1456,6 +1475,14 @@ export default function App({
             onRememberFolder={rememberFolder}
             onForgetFolder={forgetFolder}
           />
+          <SaveTargetPanel
+            dir={exportDir}
+            onPickDir={chooseExportDir}
+            onForgetDir={dropExportDir}
+            askWhere={askWhere}
+            onAskWhere={setAskWhere}
+            simple={simple}
+          />
         </aside>
 
         <main
@@ -1535,11 +1562,7 @@ export default function App({
           onFilename={changeExportName}
           fps={exportFps}
           onFps={setExportFps}
-          dir={exportDir}
-          onPickDir={chooseExportDir}
-          onForgetDir={dropExportDir}
-          askWhere={askWhere}
-          onAskWhere={setAskWhere}
+          target={saveTargetLabel(exportDir, askWhere)}
           meta={{
             width: stage.width,
             height: stage.height,

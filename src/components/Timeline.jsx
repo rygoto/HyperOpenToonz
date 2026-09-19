@@ -257,7 +257,8 @@ export default function Timeline({
 
   const onDragMove = (e) => {
     const d = drag.current
-    if (!d) return
+    // シークのドラッグは onSurfaceMove の受け持ち
+    if (!d || d.mode === 'scrub') return
     const t = timeAt(e.clientX)
 
     if (d.mode === 'move') {
