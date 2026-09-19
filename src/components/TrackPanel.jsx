@@ -323,7 +323,7 @@ function TrackRow({
           </Fold>
         )}
 
-        {sound && track.type === 'bg' && (
+        {sound && track.type === 'bg' && track.kind === 'video' && (
           <VideoSoundBody track={track} onPatch={onPatch} onPatchLive={onPatchLive} onBeginEdit={onBeginEdit} />
         )}
 

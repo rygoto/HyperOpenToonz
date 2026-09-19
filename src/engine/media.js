@@ -3,6 +3,7 @@ const VIDEO_EXT = ['mp4', 'webm', 'mov', 'm4v', 'ogv', 'ogg']
 const AUDIO_EXT = ['wav', 'mp3', 'm4a', 'aac', 'flac', 'oga']
 
 export const BACKGROUND_ACCEPT = [...IMAGE_EXT, ...VIDEO_EXT].map((e) => '.' + e).join(',')
+export const IMAGE_ACCEPT = IMAGE_EXT.map((e) => '.' + e).join(',')
 export const AUDIO_ACCEPT = AUDIO_EXT.map((e) => '.' + e).join(',')
 export const VIDEO_ACCEPT = VIDEO_EXT.map((e) => '.' + e).join(',')
 
@@ -189,6 +190,8 @@ export async function loadCellSequence(fileList, onProgress) {
     frames,
     names: files.map((f) => f.name),
     paths: files.map(filePath),
+    // 素材ごと保存するときに使う実物(names と同じ順)
+    sources: files,
     width: frames[0].width,
     height: frames[0].height,
   }

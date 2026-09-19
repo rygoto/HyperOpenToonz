@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { BACKGROUND_ACCEPT, VIDEO_ACCEPT } from '../engine/media.js'
+import { BACKGROUND_ACCEPT, IMAGE_ACCEPT, VIDEO_ACCEPT } from '../engine/media.js'
 import Fold from './Fold.jsx'
 
 /** 出力の解像度と下地。どちらのアプリでも同じものを使う */
@@ -66,7 +66,7 @@ function StageFold({ stage, onStage }) {
 /**
  * 背景 / BOOK の読み込みとステージ設定。
  * 読み込んだ絵はレイヤー(トラック)になるので、重なり順はトラック側で入れ替える。
- * 音声付加側(sound)では、動画だけを読み込むパネルになる。
+ * 音声付加側(sound)では、動画と静止画を並べていくパネルになる。
  */
 export default function BackgroundPanel({ onAdd, onAddVideos, stage, onStage, simple, sound = false }) {
   const backInput = useRef(null)
@@ -79,15 +79,15 @@ export default function BackgroundPanel({ onAdd, onAddVideos, stage, onStage, si
     e.target.value = ''
   }
 
-  // 音声付加側: 動画だけを読み込む(静止画・連番は使わない)
+  // 音声付加側: 動画と静止画を読み込む(連番は使わない)
   if (sound) {
     return (
       <section className="panel">
-        <h2 className="panel__title">動画</h2>
+        <h2 className="panel__title">動画 / 画像</h2>
         <input
           ref={videoInput}
           type="file"
-          accept={VIDEO_ACCEPT}
+          accept={`${VIDEO_ACCEPT},${IMAGE_ACCEPT}`}
           multiple
           hidden
           onChange={(e) => {
@@ -97,11 +97,11 @@ export default function BackgroundPanel({ onAdd, onAddVideos, stage, onStage, si
           }}
         />
         <button className="wide primary" onClick={() => videoInput.current.click()}>
-          ＋ 動画を読み込む (mp4 / webm / mov …)
+          ＋ 動画 / 画像を読み込む (mp4 / mov / png / jpg …)
         </button>
         {!simple && (
           <p className="hint">
-            1本目は先頭に、2本目からは今ある動画の後ろへつなげて置きます。タイムラインで分割・移動すれば切り貼りできます。
+            1つ目は先頭に、2つ目からは今ある動画の後ろへつなげて置きます。静止画は3秒のカットになり、タイムラインで長さを変えられます。分割・移動すれば切り貼りできます。
             動画に入っている音も波形になり、音量を調整できます。
           </p>
         )}

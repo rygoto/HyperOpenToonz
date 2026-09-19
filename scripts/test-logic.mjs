@@ -809,3 +809,39 @@ test('音声付加: 音を取り出した動画も Web Audio で鳴らし、音�
   assert.equal(sameSchedule(tracks, [video, { ...se, clips: [...se.clips] }]), false)
   assert.equal(sameSchedule(tracks, [video]), false)
 })
+
+test('素材ごと保存: .piyo にまとめて開き直すと、シーンと素材の中身が元どおりに戻る', async () => {
+  const { packBundle, readZip, trackSources, unpackBundle } = await import('../src/engine/bundle.js')
+  const { serializeScene } = await import('../src/engine/scene.js')
+  const bytes = (n, seed) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 0xff)
+  const video = markPath(new File([bytes(5000, 1)], 'cut01.mp4'), 'work/cut01.mp4')
+  const cells = [1, 2].map((i) => markPath(new File([bytes(300, i + 10)], `c_000${i}.png`), `work/セル/c_000${i}.png`))
+  // 別のフォルダにある同じ名前のものも取り違えない
+  const se = markPath(new File([bytes(700, 3)], 'c_0001.png'), 'other/c_0001.png')
+  const tracks = [
+    bgTrack({ kind: 'video', name: 'cut01', fileName: 'cut01.mp4', path: 'work/cut01.mp4', sources: [video], fx: undefined, clips: [{ id: 'k', start: 0, in: 1, len: 2 }] }),
+    cellTrack({ name: 'c', files: ['c_0001.png', 'c_0002.png'], paths: cells.map(filePath), sources: cells, frames: new Array(2), clips: [] }),
+    bgTrack({ name: 'still', fileName: 'c_0001.png', path: 'other/c_0001.png', sources: [se], clips: [] }),
+  ]
+  const doc = serializeScene({ tracks, stage: {}, projectFps: 24, exportFps: 30, muted: false, volume: 1, name: 'n', folders: [], mode: 'sound' })
+  const { assets, missing } = trackSources(tracks)
+  assert.deepEqual(missing, [])
+  assert.equal(assets.length, 4)
+
+  const blob = await packBundle(doc, assets)
+  assert.equal((await readZip(blob)).size, 5)
+
+  const { text, files } = await unpackBundle(new File([blob], 'x.piyo'))
+  const scene = parseScene(text)
+  assert.equal(scene.mode, 'sound')
+  assert.equal(scene.project.exportFps, 30)
+  const pool = makePool(files)
+  assert.equal(poolCoversScene(scene, pool), true)
+  for (const orig of [video, ...cells, se]) {
+    const got = poolFind(pool, orig.name, filePath(orig))
+    assert.deepEqual(new Uint8Array(await got.arrayBuffer()), new Uint8Array(await orig.arrayBuffer()))
+  }
+
+  // 実物を持たないレイヤーがあればまとめない
+  assert.deepEqual(trackSources([bgTrack({ name: 'x', fileName: 'x.png' })]).missing, ['x'])
+})
