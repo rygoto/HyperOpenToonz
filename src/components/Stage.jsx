@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { composite, placeRect, trackDeg, trackRectAt } from '../engine/compositor.js'
 import { filesFromDataTransfer } from '../engine/media.js'
-import { activeClip, bgSourceTime, isVisual } from '../engine/timeline.js'
+import { activeClip, bgPastEnd, bgSourceTime, isVisual } from '../engine/timeline.js'
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -65,7 +65,7 @@ function syncBgTrack(track, st, muted, volume) {
   el.muted = muted || !!track.muted || !!track.buffer
   el.volume = clamp(volume * (track.gain ?? 1), 0, 1)
   const clip = activeClip(track, st.time)
-  if (!clip) {
+  if (!clip || bgPastEnd(track, clip, st.time)) {
     if (!el.paused) el.pause()
     return
   }

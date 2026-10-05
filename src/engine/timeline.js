@@ -79,6 +79,21 @@ export function bgSourceTime(track, clip, time) {
   return Math.min(Math.max(0, t), Math.max(0, dur - 0.001))
 }
 
+/**
+ * クリップが素材の尻を越えて、もう映すものが無いか。
+ * 短い素材に差し替えたクリップは長さを保つので、余った分は何も描かない(下地の色が出る)。
+ */
+export function bgPastEnd(track, clip, time) {
+  if (track.kind !== 'video' || !(track.duration > 0)) return false
+  return clip.in + (time - clip.start) >= track.duration + 1e-6
+}
+
+/** クリップのうち、素材の尻を越えている長さ(秒)。越えていなければ 0 */
+export function bgOverrunSec(track, clip) {
+  if (!isBg(track) || track.kind !== 'video' || !(track.duration > 0)) return 0
+  return Math.min(clip.len, Math.max(0, clip.in + clip.len - track.duration))
+}
+
 /** 再生位置 time に表示すべきコマ。範囲外は null */
 export function cellFrameIndex(track, clip, time) {
   const local = time - clip.start
@@ -111,13 +126,31 @@ export function trimClipStart(track, clip, newStart) {
   return { ...clip, start: clip.start + d / u, in: clip.in + d, len: clip.len - d }
 }
 
-/** 尻を newEnd まで詰める / 伸ばす(素材の終端を超えない) */
+/** 尻を newEnd まで詰める / 伸ばす(素材の終端を超えない。もう超えているクリップは今の長さまで) */
 export function trimClipEnd(track, clip, newEnd) {
   const u = unitsPerSecond(track)
   let len = (newEnd - clip.start) * u
-  len = Math.min(len, sourceUnits(track) - clip.in)
+  len = Math.min(len, Math.max(sourceUnits(track) - clip.in, clip.len))
   len = Math.max(len, minUnits(track))
   return { ...clip, len }
+}
+
+/**
+ * 連動: fromSec 以降に始まるクリップを、どのレイヤーのものも delta 秒ずらす。
+ * クリップの尻を動かしたとき、後ろに並んでいるものを同じだけ繰り下げる / 詰めるのに使う。
+ * skipIds は動かさないクリップ(尻を動かした本人)。
+ */
+export function rippleFrom(tracks, fromSec, delta, skipIds = []) {
+  if (!delta) return tracks
+  return tracks.map((t) => {
+    if (!t.clips.some((c) => c.start >= fromSec - 1e-6 && !skipIds.includes(c.id))) return t
+    return replaceClips(
+      t,
+      t.clips.map((c) =>
+        c.start >= fromSec - 1e-6 && !skipIds.includes(c.id) ? { ...c, start: Math.max(0, c.start + delta) } : c,
+      ),
+    )
+  })
 }
 
 export function sortClips(clips) {
@@ -130,6 +163,30 @@ export function mapTrack(tracks, trackId, fn) {
 
 export function replaceClips(track, clips) {
   return { ...track, clips: sortClips(clips) }
+}
+
+/**
+ * 選んだ背景クリップを、別の素材のレイヤーへ移す(差し替え)。
+ * 素材はレイヤーが持っているので、選ばれなかったクリップは元のレイヤーに残し、
+ * 選んだ分だけを make(track, clips) がつくる新しいレイヤーに載せて、すぐ手前に置く。
+ * クリップは位置と長さを保ち、新しい素材の頭から映す。make が null を返したレイヤーは触らない。
+ */
+export function replaceClipSource(tracks, clipIds, make) {
+  const out = []
+  let changed = false
+  for (const t of tracks) {
+    const picked = isBg(t) ? t.clips.filter((c) => clipIds.includes(c.id)) : []
+    const made = picked.length > 0 ? make(t, picked.map((c) => ({ ...c, in: 0 }))) : null
+    if (!made) {
+      out.push(t)
+      continue
+    }
+    changed = true
+    const rest = t.clips.filter((c) => !picked.includes(c))
+    if (rest.length > 0) out.push({ ...t, clips: rest })
+    out.push(made)
+  }
+  return changed ? out : tracks
 }
 
 /** クリップを複製して end まで並べる */

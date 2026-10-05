@@ -368,7 +368,7 @@ function TrackRow({
                   onClipPatch(track.id, only.id, {
                     len: Math.max(
                       minUnits(track),
-                      Math.min(v * unitsPerSecond(track), sourceUnits(track) - only.in),
+                      Math.min(v * unitsPerSecond(track), Math.max(sourceUnits(track) - only.in, only.len)),
                     ),
                   })
                 }

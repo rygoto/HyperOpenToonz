@@ -34,6 +34,8 @@ import {
 import { createClock } from '../src/engine/clock.js'
 import {
   activeClip,
+  bgOverrunSec,
+  bgPastEnd,
   bgSourceTime,
   cellFrameIndex,
   clipEndSec,
@@ -42,6 +44,8 @@ import {
   offsetClipsTo,
   projectDurationSec,
   repeatToFill,
+  replaceClipSource,
+  rippleFrom,
   sourceUnits,
   splitClip,
   trackEndSec,
@@ -862,4 +866,61 @@ test('覚えていた保存先フォルダが消えていたら、ダイアロ�
   // それ以外の失敗は隠さない
   const broken = { name: 'out', getFileHandle: async () => { throw new DOMException('disk', 'QuotaExceededError') } }
   await assert.rejects(pickSaveTarget('a.piyo', { dir: broken }), { name: 'QuotaExceededError' })
+})
+
+test('差し替え: 選んだクリップだけが新しい素材のレイヤーへ移り、位置と長さは保つ', () => {
+  const a = bgTrack({
+    id: 'a',
+    kind: 'video',
+    duration: 10,
+    clips: [
+      { id: 'c1', start: 0, in: 0, len: 4 },
+      { id: 'c2', start: 4, in: 4, len: 6 },
+    ],
+  })
+  const se = audioTrack({ id: 's', clips: [{ id: 'c3', start: 1, in: 0, len: 1 }] })
+  const make = (old, clips) => ({ ...old, id: 'new', duration: 2, clips })
+  const out = replaceClipSource([a, se], ['c2', 'c3'], make)
+  assert.deepEqual(out.map((t) => t.id), ['a', 'new', 's'])
+  assert.deepEqual(out[0].clips.map((c) => c.id), ['c1'])
+  assert.deepEqual(out[1].clips, [{ id: 'c2', start: 4, in: 0, len: 6 }])
+  assert.equal(out[2], se) // 音声クリップは対象外
+
+  // レイヤーのクリップを全部選んだら、元のレイヤーは残らない
+  assert.deepEqual(replaceClipSource([a], ['c1', 'c2'], make).map((t) => t.id), ['new'])
+  const same = [a, se]
+  assert.equal(replaceClipSource(same, ['zzz'], make), same)
+
+  // 短い素材(2秒)に 6 秒のクリップ: 2秒より先は何も映らず、尻はそれ以上伸びない
+  const t = out[1]
+  const c = t.clips[0]
+  assert.equal(bgPastEnd(t, c, 5.9), false)
+  assert.equal(bgPastEnd(t, c, 6.1), true)
+  assert.equal(bgOverrunSec(t, c), 4)
+  assert.equal(trimClipEnd(t, c, 99).len, 6)
+  assert.equal(trimClipEnd(t, c, 7).len, 3)
+  assert.equal(bgPastEnd(bgTrack(), { start: 0, in: 0, len: 99 }, 50), false) // 静止画は尽きない
+})
+
+test('連動: 尻を動かした位置より後ろのクリップが、全レイヤーで同じだけずれる', () => {
+  const v = bgTrack({
+    id: 'v',
+    clips: [
+      { id: 'a', start: 0, in: 0, len: 5 },
+      { id: 'b', start: 5, in: 0, len: 3 },
+    ],
+  })
+  const bgm = audioTrack({ id: 'm', clips: [{ id: 'm1', start: 0, in: 0, len: 8 }] })
+  const se = audioTrack({ id: 's', clips: [{ id: 's1', start: 6, in: 0, len: 1 }] })
+  const tracks = [v, bgm, se]
+
+  const longer = rippleFrom(tracks, 5, 2, ['a'])
+  assert.deepEqual(longer[0].clips.map((c) => c.start), [0, 7])
+  assert.equal(longer[1], bgm) // 手前から始まっているものは動かない
+  assert.equal(longer[2].clips[0].start, 8)
+
+  const shorter = rippleFrom(tracks, 5, -1.5, ['a'])
+  assert.deepEqual(shorter[0].clips.map((c) => c.start), [0, 3.5])
+  assert.equal(shorter[2].clips[0].start, 4.5)
+  assert.equal(rippleFrom(tracks, 5, 0, ['a']), tracks)
 })

@@ -13,7 +13,7 @@ import {
   canEncodeVideo,
 } from 'mediabunny'
 import { composite } from './compositor.js'
-import { activeClip, bgSourceTime } from './timeline.js'
+import { activeClip, bgPastEnd, bgSourceTime } from './timeline.js'
 import { evenSize, bufferHasSignal, decodeBgAudio, mixProjectAudio } from './mixAudio.js'
 
 function sleep(ms) {
@@ -128,7 +128,7 @@ async function frameReaders(view, total, dt, duration) {
     for (let i = 0; i < total; i++) {
       const t = Math.min(duration, i * dt)
       const clip = activeClip(track, t)
-      times.push(clip ? bgSourceTime(track, clip, t) + FRAME_EPSILON : null)
+      times.push(clip && !bgPastEnd(track, clip, t) ? bgSourceTime(track, clip, t) + FRAME_EPSILON : null)
     }
     const reader = await openFrameReader(track, times)
     if (reader) readers.set(track.id, reader)

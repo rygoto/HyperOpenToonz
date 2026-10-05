@@ -1,4 +1,4 @@
-import { activeClip, cellFrameIndex } from './timeline.js'
+import { activeClip, bgPastEnd, cellFrameIndex } from './timeline.js'
 import { hasFx, pruneFxCache, renderFx } from './fx.js'
 
 /** src を dst の矩形にどう収めるか */
@@ -124,7 +124,8 @@ function drawPlaced(ctx, src, track, cw, ch) {
 function drawBg(ctx, track, cw, ch, time) {
   if (!(track.width > 0)) return
   if (track.kind === 'video' && track.el.readyState < 2) return
-  if (!activeClip(track, time)) return
+  const clip = activeClip(track, time)
+  if (!clip || bgPastEnd(track, clip, time)) return
 
   // 動画は毎フレーム絵が変わるのでキャッシュしない
   const src = shot(track, track.el, track.kind === 'video' ? null : 'still')

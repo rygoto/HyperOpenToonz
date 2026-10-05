@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from 'react'
+import { useRef, useSyncExternalStore } from 'react'
+import { BACKGROUND_ACCEPT } from '../engine/media.js'
 
 function fmt(t) {
   const sign = t < 0 ? '-' : ''
@@ -24,12 +25,15 @@ export default function Transport({
   onCut,
   onPaste,
   onDuplicate,
+  canReplace,
+  onReplace,
   onUndo,
   onRedo,
   simple,
 }) {
   const st = useSyncExternalStore(clock.subscribe, clock.getSnapshot)
   const hasSel = selectionCount > 0
+  const replaceInput = useRef(null)
 
   return (
     <div className="transport">
@@ -65,6 +69,25 @@ export default function Transport({
         <button type="button" title="切り取り (Ctrl+X)" disabled={!hasSel} onClick={onCut}>切り取り</button>
         <button type="button" title="貼り付け (Ctrl+V)" onClick={onPaste}>貼付</button>
         <button type="button" title="複製 (Ctrl+D)" disabled={!hasSel} onClick={onDuplicate}>複製</button>
+        <input
+          ref={replaceInput}
+          type="file"
+          accept={BACKGROUND_ACCEPT}
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) onReplace(f)
+            e.target.value = ''
+          }}
+        />
+        <button
+          type="button"
+          title="選択した動画 / 画像のクリップを別の素材に差し替える(位置と長さはそのまま)"
+          disabled={!canReplace}
+          onClick={() => replaceInput.current.click()}
+        >
+          差し替え
+        </button>
         <button type="button" title="元に戻す (Ctrl+Z)" onClick={onUndo}>↺</button>
         <button type="button" title="やり直す (Ctrl+Shift+Z)" onClick={onRedo}>↻</button>
       </div>

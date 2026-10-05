@@ -9,6 +9,7 @@ import {
   makeClip,
   projectDurationSec,
   repeatToFill,
+  replaceClipSource,
   sortClips,
   splitClip,
   trackEndSec,
@@ -764,6 +765,65 @@ export default function App({
     )
     if (created.length) setSelection(created)
   }, [commit])
+
+  /**
+   * 選択中の動画 / 画像クリップを、別の素材(動画でも静止画でも)に差し替える。
+   * クリップの位置と長さはそのままで、新しい素材の頭から映す。
+   * 素材のほうが短ければ、余った分は何も映らない(下地の色 = 既定は黒)。
+   */
+  const replaceSelection = useCallback(
+    async (file) => {
+      const kind = kindOf(file)
+      if (kind !== 'video' && kind !== 'image') {
+        say('差し替えには動画か画像を選んでください', 'error')
+        return
+      }
+      const sel = selectionRef.current
+      const targets = tracksRef.current.filter((t) => t.type === 'bg' && t.clips.some((c) => sel.includes(c.id)))
+      if (targets.length === 0) {
+        say('差し替える動画 / 画像のクリップを選んでください', 'error')
+        return
+      }
+      setBusy({ label: `${file.name} を読み込み中…` })
+      try {
+        // 動画の要素はレイヤーごとに要る(別々の位置を再生するため)。音は1つを使い回せる
+        const loaded = new Map()
+        for (const t of targets) loaded.set(t.id, await loadBackground(file))
+        const extracted = sound && kind === 'video' ? await decodeVideoAudio(file) : null
+        let short = false
+        commit((prev) =>
+          replaceClipSource(prev, sel, (old, clips) => {
+            const src = loaded.get(old.id)
+            if (!src) return null
+            if (src.kind === 'video' && src.duration > 0 && clips.some((c) => c.len > src.duration + 1e-6)) short = true
+            return {
+              ...old,
+              id: nextId('track'),
+              kind: src.kind,
+              name: src.name,
+              fileName: file.name,
+              path: filePath(file),
+              sources: [file],
+              el: src.el,
+              url: src.url,
+              width: src.width,
+              height: src.height,
+              duration: src.duration,
+              buffer: extracted?.buffer ?? null,
+              peaks: extracted?.peaks ?? null,
+              clips,
+            }
+          }),
+        )
+        say(`${file.name} に差し替えました${short ? '(素材のほうが短いので、余った分は何も映りません)' : ''}`)
+      } catch (e) {
+        say(e?.message || '差し替えられませんでした', 'error')
+      } finally {
+        setBusy(null)
+      }
+    },
+    [commit, say, sound],
+  )
 
   const nudgeSelection = useCallback(
     (frames) => {
@@ -1542,6 +1602,8 @@ export default function App({
             onCut={cutSelection}
             onPaste={paste}
             onDuplicate={duplicateSelection}
+            canReplace={tracks.some((t) => t.type === 'bg' && t.clips.some((c) => selection.includes(c.id)))}
+            onReplace={replaceSelection}
             onUndo={undo}
             onRedo={redo}
             simple={simple}

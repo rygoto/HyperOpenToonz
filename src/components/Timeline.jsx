@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
+  bgOverrunSec,
   clipEndSec,
   clipLenSec,
   isVisual,
+  rippleFrom,
   sortClips,
   trackFps,
   trimClipEnd,
@@ -12,6 +14,15 @@ import { useMatchMedia } from '../hooks/useMatchMedia.js'
 
 const RULER_H = 22
 const SNAP_PX = 8
+const RIPPLE_KEY = 'piyopiyo.ripple'
+
+function loadRipple() {
+  try {
+    return window.localStorage.getItem(RIPPLE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 const STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
 
 function tickStep(pxPerSec) {
@@ -62,6 +73,8 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
   const isCellTrack = track.type === 'cell'
   const framePx = isCellTrack ? pxPerSec / trackFps(track) : 0
   const showTicks = isCellTrack && framePx >= 4
+  // 差し替えた素材が短くて、何も映らない部分
+  const voidPx = bgOverrunSec(track, clip) * pxPerSec
 
   return (
     <div
@@ -86,6 +99,7 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
         onPointerDown={(e) => onGrab(e, track, clip, 'trim-start')}
       />
       {(track.type === 'audio' || track.peaks) && width > 8 && <Wave track={track} clip={clip} width={width} />}
+      {voidPx >= 1 && <div className="clip__void" style={{ width: voidPx }} title="素材が終わっているので何も映りません" />}
       <span className="clip__label">
         {isCellTrack
           ? `${Math.round(clip.in) + 1}〜${Math.round(clip.in + clip.len)}コマ`
@@ -114,6 +128,8 @@ export default function Timeline({
   const coarse = useMatchMedia('(pointer: coarse)')
   const ROW_H = coarse ? 44 : 30
   const [pxPerSec, setPxPerSec] = useState(90)
+  // 連動: クリップの尻を動かしたら、後ろのクリップも同じだけずらす
+  const [ripple, setRipple] = useState(loadRipple)
   const [viewport, setViewport] = useState({ left: 0, width: 800 })
   const scrollRef = useRef(null)
   const contentRef = useRef(null)
@@ -238,9 +254,15 @@ export default function Timeline({
       }
     }
 
+    // 連動中は後ろのクリップも一緒に動くので、そこへは吸着させない
+    const rippling = ripple && mode === 'trim-end'
+    const oldEnd = clipEndSec(track, clip)
+
     drag.current = {
       mode,
       ids,
+      rippling,
+      oldEnd,
       began: false,
       trackId: track.id,
       clipId: clip.id,
@@ -249,7 +271,7 @@ export default function Timeline({
       edges,
       primaryStart: clip.start,
       minStart: Math.min(...tracks.flatMap((tr) => tr.clips.filter((c) => ids.includes(c.id)).map((c) => c.start))),
-      snaps: snapPoints(ids),
+      snaps: rippling ? [st.time, ...snapPoints(ids).filter((p) => p < oldEnd - 1e-6)] : snapPoints(ids),
       moved: false,
     }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -315,12 +337,13 @@ export default function Timeline({
       d.began = true
       onBeginEdit()
     }
+    const trimmed = d.base.map((x) =>
+      x.id === tr.id
+        ? { ...x, clips: sortClips(x.clips.map((c) => (c.id === clip.id ? next : c))) }
+        : x,
+    )
     onTracksChange(
-      d.base.map((x) =>
-        x.id === tr.id
-          ? { ...x, clips: sortClips(x.clips.map((c) => (c.id === clip.id ? next : c))) }
-          : x,
-      ),
+      d.rippling ? rippleFrom(trimmed, d.oldEnd, clipEndSec(tr, next) - d.oldEnd, [clip.id]) : trimmed,
     )
   }
 
@@ -398,6 +421,22 @@ export default function Timeline({
             ? 'タップで選択 / ドラッグで移動・トリム / ピンチで拡大'
             : 'クリックで選択 / ドラッグで移動 / 端をドラッグでトリム ・ Ctrl+B 分割 ・ Ctrl+X/C/V ・ Del 削除 ・ Ctrl+Z 戻す'}
         </span>
+        <button
+          className={'tl__ripple' + (ripple ? ' primary' : '')}
+          aria-pressed={ripple}
+          title="オンのあいだ、クリップの末尾を伸ばす / 縮めると、それより後ろのクリップ(全レイヤー)が同じだけずれます"
+          onClick={() => {
+            const next = !ripple
+            setRipple(next)
+            try {
+              window.localStorage.setItem(RIPPLE_KEY, next ? '1' : '0')
+            } catch {
+              /* 覚えられなくても切り替えはできる */
+            }
+          }}
+        >
+          後ろも連動: {ripple ? 'オン' : 'オフ'}
+        </button>
         <div className="tl__zoom">
           <button onClick={() => setPxPerSec((p) => Math.max(6, p / 1.4))} title="縮小">−</button>
           <span className="mono dim">{Math.round(pxPerSec)}px/s</span>

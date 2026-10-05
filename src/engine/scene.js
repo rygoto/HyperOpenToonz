@@ -17,7 +17,7 @@ import { normalizeFx } from './fx.js'
 import { normalizeMode } from '../modes.js'
 import { nextId } from './ids.js'
 import { filePath, loadBackground, loadCellSequence } from './media.js'
-import { makeClip, minUnits, sortClips, sourceUnits } from './timeline.js'
+import { isBg, makeClip, minUnits, sortClips, sourceUnits } from './timeline.js'
 
 export const SCENE_APP = 'PiyopiyoToonz'
 export const SCENE_KIND = 'scene'
@@ -354,6 +354,7 @@ export function poolCoversScene(scene, pool) {
 /**
  * 素材の実物に合わせてクリップを詰め直す。
  * 選び直した素材が短くなっていても、はみ出した分を切って形は保つ。
+ * 背景のクリップだけは長さをそのままにする(素材より長い分は何も映らない。差し替えと同じ扱い)。
  */
 function fitClips(track, clips) {
   const total = sourceUnits(track)
@@ -362,7 +363,7 @@ function fitClips(track, clips) {
   for (const c of clips) {
     const from = Number.isFinite(total) ? Math.min(c.in, Math.max(0, total - min)) : c.in
     let len = c.len
-    if (Number.isFinite(total)) len = Math.min(len, total - from)
+    if (Number.isFinite(total) && !isBg(track)) len = Math.min(len, total - from)
     if (!(len >= min)) continue
     out.push({ id: nextId('clip'), start: c.start, in: from, len })
   }
