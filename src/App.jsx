@@ -25,7 +25,7 @@ import ExportDialog from './components/ExportDialog.jsx'
 import ScenePanel from './components/ScenePanel.jsx'
 import SaveTargetPanel, { saveTargetLabel } from './components/SaveTargetPanel.jsx'
 import SceneDialog from './components/SceneDialog.jsx'
-import { exportComposedVideo } from './engine/exportVideo.js'
+import { exportComposedVideo, exportFrameCount, exportPngSequence } from './engine/exportVideo.js'
 import { clearFxCache, defaultFx } from './engine/fx.js'
 import {
   addToPool,
@@ -44,16 +44,26 @@ import {
   listSourceFolders,
   rememberSourceFolder,
 } from './engine/assetLibrary.js'
-import { BUNDLE_EXT, BUNDLE_MIME, isBundleFile, packBundle, trackSources, unpackBundle } from './engine/bundle.js'
+import {
+  BUNDLE_EXT,
+  BUNDLE_MIME,
+  isBundleFile,
+  packBundle,
+  trackSources,
+  unpackBundle,
+  writeZip,
+} from './engine/bundle.js'
 import {
   directoryOfFile,
   discardSaveTarget,
   fileStamp,
   forgetExportDirectory,
   loadExportDirectory,
+  openSequenceFolder,
   pickExportDirectory,
   pickSaveTarget,
   reauthorizeDirectory,
+  sanitizeFilename,
   saveBlob,
   withExtension,
   writeSaveTarget,
@@ -65,6 +75,11 @@ const FALLBACK_DURATION = 5
 // 音声付加側で静止画を置いたときの長さ(秒)
 const STILL_DURATION = 3
 const HISTORY_LIMIT = 100
+// アニメーション側で選べる書き出しの形式
+const EXPORT_FORMATS = [
+  { id: 'mp4', label: 'MP4(動画)' },
+  { id: 'png', label: 'PNG(連番)' },
+]
 
 // 上下分割(プレビュー / タイムライン)の下限
 const MIN_TIMELINE_H = 96
@@ -158,6 +173,11 @@ export default function App({
   // 書き出しの設定
   const [exportOpen, setExportOpen] = useState(false)
   const [exportName, setExportName] = useState('')
+  // 書き出す形式。PNG 連番はアニメーション側だけ
+  const [exportFormat, setExportFormat] = useState('mp4')
+  const format = sound ? 'mp4' : exportFormat
+  // PNG で頭から何枚書き出すか(null = 全部)
+  const [exportFrames, setExportFrames] = useState(null)
   const [exportDir, setExportDir] = useState(null)
   const [askWhere, setAskWhere] = useState(false)
   // 開いたシーンのファイル。次の保存はこれと同じフォルダへ(保存先のフォルダが決まったら消す)
@@ -1078,7 +1098,19 @@ export default function App({
       clock.pause()
       setExportOpen(false)
       setAssetsOpen(false)
-      setSceneHandle(file.piyoHandle ?? null)
+      const sceneFile = file.piyoHandle ?? null
+      setSceneHandle(sceneFile)
+      // 前に使ったことのあるフォルダ(かその中)なら、訊かずにそこを保存先にする
+      if (sceneFile) {
+        directoryOfFile(sceneFile, { extra: folders.map((f) => f.handle) })
+          .then((found) => {
+            if (!found) return
+            setExportDir(found)
+            setAskWhere(false)
+            setSceneHandle((h) => (h === sceneFile ? null : h))
+          })
+          .catch(() => {})
+      }
 
       // 中に入っていた素材を先に、一緒に渡されたものを後に(同じパスなら後勝ち)
       const pool = makePool([...bundled, ...withFiles])
@@ -1094,7 +1126,7 @@ export default function App({
       setScenePool(pool)
       setSceneDoc(doc)
     },
-    [applyScene, cfg.id, clock, onHandOver, say, scanFolders],
+    [applyScene, cfg.id, clock, folders, onHandOver, say, scanFolders],
   )
 
   // もう一方のアプリから回ってきたシーン JSON を開く
@@ -1217,16 +1249,16 @@ export default function App({
    * やめたときは AbortError を投げる。
    */
   const resolveSaveDir = useCallback(async () => {
+    let dir = exportDir
     if (sceneHandle) {
-      const found = await directoryOfFile(sceneHandle, exportDir?.granted ? exportDir.handle : null)
+      const found = await directoryOfFile(sceneHandle, { request: true, extra: folders.map((f) => f.handle) })
       if (found) {
+        dir = found
         setExportDir(found)
         setSceneHandle(null)
         setAskWhere(false)
-        return found
       }
     }
-    let dir = exportDir
     // 前に選んだフォルダは、保存を押したこの操作の中で許可を取り直す
     if (dir && !dir.granted) {
       const ok = await reauthorizeDirectory(dir.handle)
@@ -1239,7 +1271,83 @@ export default function App({
       }
     }
     return dir
-  }, [exportDir, sceneHandle, say])
+  }, [exportDir, folders, sceneHandle, say])
+
+  /**
+   * 頭から exportFrames 枚を PNG で書き出す。
+   *   1枚だけ … PNG 1つを、MP4 と同じく「保存」を押してもらって保存する
+   *   保存先フォルダあり … その中に「名前」のフォルダを作り、できたコマから順に書いていく
+   *   無し … ZIP 1つにまとめて、「保存」を押してもらって保存する
+   * フォルダの許可はボタンを押したこの操作の中でしか取れないので、先に取っておく。
+   */
+  const startPngExport = useCallback(
+    async (dur) => {
+      const base = sanitizeFilename(exportName || `${cfg.filePrefix}-${fileStamp()}`).replace(/\.(mp4|png|zip)$/i, '')
+      const count = Math.min(exportFrameCount(dur, exportFps), exportFrames ?? Infinity)
+      const digits = Math.max(4, String(count).length)
+      const frameName = (i) => `${base}_${String(i + 1).padStart(digits, '0')}.png`
+
+      let folder = null
+      if (count > 1) {
+        try {
+          const dir = await resolveSaveDir()
+          if (dir) folder = await openSequenceFolder(dir.handle, base)
+        } catch (e) {
+          if (e?.name !== 'AbortError') say(e?.message || '保存先を開けませんでした', 'error')
+          return
+        }
+      }
+
+      setExportOpen(false)
+      clock.pause()
+      setAssetsOpen(false)
+      const ac = new AbortController()
+      setFrozen(true)
+      setExportResult(null)
+      const label = 'PNG を書き出し中…'
+      setBusy({ label, done: 0, total: count, onCancel: () => ac.abort() })
+      const entries = []
+      try {
+        await exportPngSequence({
+          view: {
+            width: stage.width,
+            height: stage.height,
+            bgColor: stage.bgColor,
+            checker: false,
+            tracks: tracksRef.current,
+          },
+          duration: dur,
+          fps: exportFps,
+          count,
+          signal: ac.signal,
+          onFrame: async (blob, i) => {
+            if (folder) await folder.write(frameName(i), blob)
+            else entries.push({ name: frameName(i), blob })
+          },
+          onProgress: (done, total) => setBusy({ label, done, total, onCancel: () => ac.abort() }),
+        })
+        if (folder) {
+          say(`📁 ${folder.folder} / ${folder.name} に PNG ${count}枚を保存しました`)
+        } else if (count === 1) {
+          setExportResult({ blob: entries[0].blob, filename: `${base}.png`, description: 'PNG 画像' })
+          say('書き出しが完了しました。保存してください')
+        } else {
+          setBusy({ label: 'ZIP にまとめています…' })
+          const zip = await writeZip(entries.map((e) => ({ ...e, name: `${base}/${e.name}` })))
+          setExportResult({ blob: zip, filename: `${base}.zip`, description: 'PNG 連番(ZIP)' })
+          say('書き出しが完了しました。保存してください')
+        }
+      } catch (e) {
+        await folder?.discard()
+        if (e?.name === 'AbortError') say('書き出しをキャンセルしました')
+        else say(e?.message || '書き出しに失敗しました', 'error')
+      } finally {
+        setBusy(null)
+        setFrozen(false)
+      }
+    },
+    [cfg.filePrefix, clock, exportFps, exportFrames, exportName, resolveSaveDir, say, stage],
+  )
 
   const startExport = useCallback(async () => {
     const duration = projectDurationSec(tracksRef.current)
@@ -1248,6 +1356,10 @@ export default function App({
       return
     }
     const dur = duration > 0 ? duration : FALLBACK_DURATION
+    if (format === 'png') {
+      startPngExport(dur)
+      return
+    }
     setExportOpen(false)
     clock.pause()
     setAssetsOpen(false)
@@ -1291,7 +1403,7 @@ export default function App({
       setBusy(null)
       setFrozen(false)
     }
-  }, [cfg.filePrefix, clock, exportFps, exportName, muted, say, stage, volume])
+  }, [cfg.filePrefix, clock, exportFps, exportName, format, muted, say, stage, startPngExport, volume])
 
   /**
    * 覚えているフォルダ(あれば許可を取り直して)へ書き出す。
@@ -1336,7 +1448,7 @@ export default function App({
   const saveExport = useCallback(async () => {
     if (!exportResult) return
     try {
-      const result = await saveOut(exportResult.blob, exportResult.filename, '動画')
+      const result = await saveOut(exportResult.blob, exportResult.filename, exportResult.description || '動画')
       if (result.how === 'cancelled') return
       setExportResult(null)
       reportSaved(result)
@@ -1495,7 +1607,7 @@ export default function App({
             {simple ? 'くわしく' : 'シンプル'}
           </button>
           <button className="primary" disabled={!!busy || frozen} onClick={openExport}>
-            MP4書き出し
+            {sound ? 'MP4書き出し' : '書き出し'}
           </button>
         </div>
       </header>
@@ -1646,11 +1758,17 @@ export default function App({
           onFilename={changeExportName}
           fps={exportFps}
           onFps={setExportFps}
+          formats={sound ? null : EXPORT_FORMATS}
+          format={format}
+          onFormat={setExportFormat}
+          frames={exportFrames}
+          onFrames={setExportFrames}
           target={saveTargetLabel(exportDir, askWhere, sceneHandle?.name)}
           meta={{
             width: stage.width,
             height: stage.height,
             duration: Math.max(projectDurationSec(tracks), 0) || FALLBACK_DURATION,
+            totalFrames: exportFrameCount(Math.max(projectDurationSec(tracks), 0) || FALLBACK_DURATION, exportFps),
             muted,
             ext: 'mp4',
           }}

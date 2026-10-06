@@ -1179,6 +1179,14 @@ input[type="color"] {
   margin-bottom: 12px;
 }
 
+.dialog__row--line {
+  flex-direction: row;
+}
+
+.dialog__row .field__input .presets button {
+  padding: 4px 10px;
+}
+
 .dialog__meta {
   margin-bottom: 10px;
 }

@@ -159,10 +159,11 @@ export function pickRecorderMime() {
   return list.find((t) => MediaRecorder.isTypeSupported(t)) || ''
 }
 
-async function prepareCanvas(view) {
+/** exact … 偶数に丸めず、ステージの大きさそのままにする(動画のコーデックを通さない PNG 用) */
+async function prepareCanvas(view, { exact = false } = {}) {
   const canvas = document.createElement('canvas')
-  canvas.width = evenSize(view.width)
-  canvas.height = evenSize(view.height)
+  canvas.width = exact ? Math.max(1, Math.round(view.width)) : evenSize(view.width)
+  canvas.height = exact ? Math.max(1, Math.round(view.height)) : evenSize(view.height)
   const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false })
   const exportView = {
     ...view,
@@ -219,7 +220,7 @@ async function exportWithWebCodecs({ view, duration, fps, volume, signal, onProg
   if (!ok) throw new Error('no-webcodecs')
 
   const { canvas, ctx, exportView } = await prepareCanvas(view)
-  const total = Math.max(1, Math.round(duration * fps))
+  const total = exportFrameCount(duration, fps)
   const dt = 1 / fps
   const audio = await mixAudio(view, duration, volume)
   const wantAac = audio && (await canEncodeAudio('aac'))
@@ -355,6 +356,51 @@ async function exportWithRecorder({ view, duration, fps, volume, signal, onProgr
   return stopped
 }
 
+function quietVideos(view) {
+  for (const track of view.tracks) {
+    if (track.type === 'bg' && track.kind === 'video' && track.el) {
+      track.el.pause()
+      track.el.muted = true
+    }
+  }
+}
+
+/** fps で書き出したときの総コマ数 */
+export function exportFrameCount(duration, fps) {
+  return Math.max(1, Math.round(duration * fps))
+}
+
+/**
+ * 頭から count 枚を PNG にして、1枚できるごとに onFrame(blob, i) へ渡す(i は 0 始まり)。
+ * 溜めずに渡すので、受け取った側でそのまま保存すれば長い尺でもメモリを食わない。
+ */
+export async function exportPngSequence({ view, duration, fps, count, signal, onProgress, onFrame }) {
+  const dur = Math.max(1 / Math.max(1, fps), duration)
+  quietVideos(view)
+
+  const { canvas, ctx, exportView } = await prepareCanvas(view, { exact: true })
+  const all = exportFrameCount(dur, fps)
+  const total = Math.min(all, Math.max(1, Math.round(Number(count) || all)))
+  const dt = 1 / fps
+
+  const readers = await frameReaders(exportView, total, dt, dur)
+  try {
+    for (let i = 0; i < total; i++) {
+      throwIfAborted(signal)
+      const t = Math.min(dur, i * dt)
+      await paintFrame(ctx, exportView, t, i, readers)
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+      if (!blob) throw new Error('PNG を作れませんでした')
+      throwIfAborted(signal)
+      await onFrame(blob, i)
+      onProgress?.(i + 1, total, 'PNG を書き出し中…')
+    }
+  } finally {
+    await closeReaders(readers)
+  }
+  return total
+}
+
 /**
  * 編集結果（背景 + セル + 音声）を 1 本の動画ファイルにする。
  * 可能なら MP4、さもなくばブラウザが扱える形式。
@@ -362,12 +408,7 @@ async function exportWithRecorder({ view, duration, fps, volume, signal, onProgr
 export async function exportComposedVideo({ view, duration, fps, volume = 1, signal, onProgress }) {
   const dur = Math.max(1 / Math.max(1, fps), duration)
   // 書き出し中はプレビュー用の再生を止め、音は mix 側から載せる
-  for (const track of view.tracks) {
-    if (track.type === 'bg' && track.kind === 'video' && track.el) {
-      track.el.pause()
-      track.el.muted = true
-    }
-  }
+  quietVideos(view)
 
   try {
     return await exportWithWebCodecs({

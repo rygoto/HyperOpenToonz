@@ -39,6 +39,8 @@ const folderUnusable = (e) =>
 const DB_NAME = 'piyopiyo'
 const STORE = 'handles'
 const DIR_KEY = 'exportDir'
+const HISTORY_KEY = 'exportDirHistory'
+const HISTORY_MAX = 16
 
 function idb() {
   return new Promise((resolve, reject) => {
@@ -89,50 +91,99 @@ export async function idbDelete(key) {
   db.close()
 }
 
+/** これまでに保存先にしたフォルダ(新しい順)。開いたシーンの場所を黙って割り出すのに使う */
+async function dirHistory() {
+  try {
+    const v = await idbGet(HISTORY_KEY)
+    return Array.isArray(v) ? v.filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+/** 保存先として覚える(今の保存先にして、履歴の先頭にも足す) */
+async function rememberDirectory(handle) {
+  try {
+    await idbPut(DIR_KEY, handle)
+    const rest = []
+    for (const h of await dirHistory()) {
+      let same = false
+      try {
+        same = await h.isSameEntry(handle)
+      } catch {
+        /* 比べられないものは別物として残す */
+      }
+      if (!same) rest.push(h)
+    }
+    await idbPut(HISTORY_KEY, [handle, ...rest].slice(0, HISTORY_MAX))
+  } catch {
+    /* 覚えられなくても今回の保存には使える */
+  }
+}
+
+const canWrite = async (handle) => {
+  try {
+    return (await handle.queryPermission?.({ mode: 'readwrite' })) === 'granted'
+  } catch {
+    return false
+  }
+}
+
 /** 保存先フォルダを選んでもらう。次回以降も同じ場所に出せるよう覚えておく */
 export async function pickExportDirectory() {
   if (!canPickDirectory()) return null
   const handle = await window.showDirectoryPicker({ id: 'piyopiyo-export', mode: 'readwrite' })
-  try {
-    await idbPut(DIR_KEY, handle)
-  } catch {
-    /* 覚えられなくても今回の書き出しには使える */
-  }
+  await rememberDirectory(handle)
   return { handle, name: handle.name, granted: true }
+}
+
+/**
+ * 知っているフォルダの中から、そのファイルが入っているフォルダを探す。
+ * 下の階層へ降りるには許可が要るので、request のときだけ取り直す(ユーザー操作の中で)。
+ */
+async function locateParent(fileHandle, candidates, request) {
+  for (const known of candidates) {
+    try {
+      const path = await known.resolve(fileHandle)
+      if (!path) continue
+      let handle = known
+      if (path.length > 1) {
+        if (request && !(await canWrite(known))) await known.requestPermission?.({ mode: 'readwrite' })
+        for (const name of path.slice(0, -1)) handle = await handle.getDirectoryHandle(name)
+      }
+      return handle
+    } catch {
+      /* 消えたフォルダや、許可の無いフォルダは飛ばす */
+    }
+  }
+  return null
 }
 
 /**
  * 開いたファイル(FileSystemFileHandle)と同じフォルダを保存先にする。
  * ブラウザはファイルから親フォルダをたどらせてくれないので、
- *   1. 覚えているフォルダ(許可済み)の中にあれば、そこから下って黙って取る
- *   2. 無ければフォルダ選択をそのファイルの場所で開き、「選択」を押してもらう
- * 取れたフォルダは次回以降の保存先として覚える。ユーザー操作の中から呼ぶこと。
- * やめたときは AbortError を投げる。
+ *   1. 知っているフォルダ(今の保存先・これまでの保存先・extra)の中にあれば、そこから黙って取る
+ *   2. 無ければ、request のときだけフォルダ選択をそのファイルの場所で開き、「選択」を押してもらう
+ * 取れたフォルダは次回以降の保存先として覚える。見つからなければ null。
+ * request はユーザー操作の中から呼ぶときだけ付けること。やめたときは AbortError を投げる。
  */
-export async function directoryOfFile(fileHandle, known = null) {
+export async function directoryOfFile(fileHandle, { request = false, extra = [] } = {}) {
   if (!canPickDirectory() || !fileHandle) return null
-  let handle = null
-  if (known) {
-    try {
-      const path = await known.resolve(fileHandle)
-      if (path) {
-        handle = known
-        for (const name of path.slice(0, -1)) handle = await handle.getDirectoryHandle(name)
-      }
-    } catch {
-      handle = null
-    }
+  let current = null
+  try {
+    current = await idbGet(DIR_KEY)
+  } catch {
+    /* noop */
   }
+  const candidates = [current, ...(await dirHistory()), ...extra].filter(Boolean)
+  let handle = await locateParent(fileHandle, candidates, request)
   if (!handle) {
+    if (!request) return null
     // id を付けると前に選んだ場所が startIn より優先されるので付けない
     handle = await window.showDirectoryPicker({ startIn: fileHandle, mode: 'readwrite' })
   }
-  try {
-    await idbPut(DIR_KEY, handle)
-  } catch {
-    /* 覚えられなくても今回の保存には使える */
-  }
-  return { handle, name: handle.name, granted: true }
+  await rememberDirectory(handle)
+  return { handle, name: handle.name, granted: await canWrite(handle) }
 }
 
 /**
@@ -193,6 +244,49 @@ async function writeToDirectory(dir, blob, filename) {
   await stream.write(blob)
   await stream.close()
   return { how: 'folder', name, folder: dir.name }
+}
+
+/**
+ * 連番を入れるフォルダを保存先の中に作る。同じ名前があれば「名前 (2)」にずらす。
+ * 返すのは { name, folder, write(filename, blob), discard() }。
+ * 保存先フォルダが使えなくなっていたら null(呼び出し側で ZIP などに落とす)。
+ */
+export async function openSequenceFolder(dir, base) {
+  const clean = sanitizeFilename(base)
+  try {
+    let name = clean
+    for (let i = 2; i < 1000; i++) {
+      try {
+        await dir.getDirectoryHandle(name)
+      } catch (e) {
+        if (e?.name === 'NotFoundError') break // 空いている
+        if (e?.name !== 'TypeMismatchError') throw e // 同名のファイルがあるときもずらす
+      }
+      name = `${clean} (${i})`
+    }
+    const sub = await dir.getDirectoryHandle(name, { create: true })
+    return {
+      name,
+      folder: dir.name,
+      async write(filename, blob) {
+        const handle = await sub.getFileHandle(filename, { create: true })
+        const stream = await handle.createWritable()
+        await stream.write(blob)
+        await stream.close()
+      },
+      /** 途中でやめたとき、書きかけのフォルダごと片付ける */
+      async discard() {
+        try {
+          await dir.removeEntry(name, { recursive: true })
+        } catch {
+          /* 消せなくても害は無い */
+        }
+      },
+    }
+  } catch (e) {
+    if (folderUnusable(e)) return null
+    throw e
+  }
 }
 
 /**
