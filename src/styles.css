@@ -224,6 +224,23 @@ input[type="color"] {
   flex: none;
 }
 
+/* 音声付加側のクリップの中身を作っているあいだの表示 */
+.job {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.job__name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--accent);
+}
+
 .notice {
   padding: 3px 10px;
   border-radius: 999px;
@@ -641,6 +658,8 @@ input[type="color"] {
 .tl__body {
   flex: 1;
   display: flex;
+  /* 中身の高さのまま並べる。引き伸ばすと、はみ出したレイヤーのクリップが切れて見えなくなる */
+  align-items: flex-start;
   min-height: 0;
   overflow-y: auto;
 }
@@ -690,6 +709,8 @@ input[type="color"] {
 .tl__scroll {
   flex: 1;
   min-width: 0;
+  /* レイヤーが少ないときは、横スクロールバーをタイムラインの下端に置く */
+  min-height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -826,6 +847,18 @@ input[type="color"] {
   outline: 2px solid #fff;
   outline-offset: -2px;
   z-index: 1;
+}
+
+/* 作っているクリップの終わり。ここから右は書き出されない */
+.tl__end {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4000px;
+  border-left: 2px solid var(--accent);
+  background: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.42) 0 6px, rgba(0, 0, 0, 0.22) 6px 12px);
+  pointer-events: none;
+  z-index: 3;
 }
 
 .tl__playhead {

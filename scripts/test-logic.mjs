@@ -56,6 +56,8 @@ import {
   cellSheetRow,
   clipEndSec,
   clipLenSec,
+  clipsInRange,
+  outputTracks,
   makeClip,
   offsetClipsTo,
   projectDurationSec,
@@ -168,7 +170,22 @@ test('分割: 端すぎる位置では割らない', () => {
   const c = whole(t)
   assert.equal(splitClip(t, c, 0), null)
   assert.equal(splitClip(t, c, 1), null)
-  assert.equal(splitClip(t, c, 0.05), null) // 1コマ未満
+  assert.equal(splitClip(t, c, 0.01), null) // 20ms 未満
+})
+
+test('セルも1コマ未満まで切れる(24fps の尻に 8fps のセルを揃える)', () => {
+  const t = cellTrack({ fps: 8 })
+  const c = whole(t)
+  // 16/24秒 = 8fps では 5コマと 1/3。尻をそこへ詰めても、最後のコマは途中まで映る
+  const cut = trimClipEnd(t, c, 16 / 24)
+  assert.ok(Math.abs(clipEndSec(t, cut) - 16 / 24) < 1e-9)
+  assert.equal(cellFrameIndex(t, cut, 15.5 / 24), 5)
+  assert.equal(cellFrameIndex(t, cut, 16 / 24), null)
+  // 6コマ目の途中(16/24秒)でも分割できる。余りは 2/24秒 = 2/3コマ
+  const six = { ...c, len: 6 }
+  const [a, b] = splitClip(t, six, 16 / 24)
+  assert.ok(Math.abs(clipLenSec(t, a) - 16 / 24) < 1e-9)
+  assert.ok(Math.abs(clipLenSec(t, b) - 2 / 24) < 1e-9)
 })
 
 test('トリム: 素材の範囲を超えない', () => {
@@ -184,7 +201,7 @@ test('トリム: 素材の範囲を超えない', () => {
   const tail = trimClipEnd(t, c, 0.5)
   assert.equal(tail.len, 4)
   assert.equal(trimClipEnd(t, c, 99).len, 8) // 素材の終端で止まる
-  assert.equal(trimClipEnd(t, c, -5).len, 1) // 最低1コマ
+  assert.equal(trimClipEnd(t, c, -5).len, 0.16) // 最低 20ms ぶん(8fps なら 0.16コマ)
 })
 
 test('音声クリップは秒単位でトリムできる', () => {
@@ -1014,4 +1031,31 @@ test('タイムシート: シーンに保存され、読み込んだ順のまま
   const back = parseScene(sceneToText(serializeScene({ ...base, tracks: [edited] })))
   assert.deepEqual(back.tracks[0].sheet, [0, 0, EMPTY, 2])
   assert.equal(back.tracks[0].clips[0].len, 4)
+})
+
+test('範囲で切り出す: かかっているクリップだけを、その範囲に切り詰めて頭を 0 に直す', () => {
+  const a = audioTrack({
+    clips: [
+      { id: 'x', start: 0, in: 1, len: 3 }, // 0〜3
+      { id: 'y', start: 4, in: 0, len: 4 }, // 4〜8
+      { id: 'z', start: 9, in: 0, len: 1 }, // 範囲の外
+    ],
+  })
+  const got = clipsInRange(a, 2, 6).map((c) => [c.start, c.in, c.len])
+  assert.deepEqual(got, [
+    [0, 3, 1], // 尻の1秒だけ。素材の読み出し位置も進む
+    [2, 0, 2],
+  ])
+  assert.deepEqual(clipsInRange(a, 3, 4), []) // 端が触れているだけなら入らない
+})
+
+test('参考用のレイヤーは書き出しに入らず、シーンには印ごと保存される', () => {
+  const ref = bgTrack({ name: 'ref', fileName: 'ref.mp4', reference: true, clips: [{ id: 'r', start: 0, in: 0, len: 2 }] })
+  const cell = cellTrack({ name: 'A', files: ['a.png'], frames: new Array(1) })
+  cell.clips = [whole(cell)]
+  assert.deepEqual(outputTracks([ref, cell]), [cell])
+  const doc = serializeScene({ tracks: [ref, cell], stage: { width: 100, height: 100 }, projectFps: 24, exportFps: 24, volume: 1 })
+  const back = parseScene(sceneToText(doc))
+  assert.equal(back.tracks[0].reference, true)
+  assert.equal('reference' in doc.tracks[1], false)
 })

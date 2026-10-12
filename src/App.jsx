@@ -6,7 +6,9 @@ import { nextId } from './engine/ids.js'
 import {
   clipContains,
   clipEndSec,
+  clipsInRange,
   makeClip,
+  outputTracks,
   projectDurationSec,
   repeatToFill,
   replaceClipSource,
@@ -165,6 +167,11 @@ export default function App({
   // シンプル表示: 数値や細かい調整を隠して、作業に要るものだけ出す
   const [simple, setSimple] = useState(loadSimple)
 
+  // 音声付加側のクリップ1つぶんの中身を作っているところか(アニメーション側だけ)。{ clipId, name, duration }
+  const [job, setJob] = useState(null)
+  // そのあいだの保存先。アニメーション側のいつもの保存先とは別に持つ
+  const [jobDir, setJobDir] = useState(null)
+
   // タイムシート編集(セル連番のコマ割り)を右側に出しているか
   const [sheetOpen, setSheetOpen] = useState(false)
 
@@ -253,9 +260,10 @@ export default function App({
 
   // ---------- 尺・解像度 ----------
   useEffect(() => {
-    const d = projectDurationSec(tracks)
+    // クリップの中身を作っているあいだは、はみ出した分を再生しない(書き出しもそこで切れる)
+    const d = job ? job.duration : projectDurationSec(tracks)
     clock.setDuration(d > 0 ? d : FALLBACK_DURATION)
-  }, [tracks, clock])
+  }, [tracks, clock, job])
 
   useEffect(() => {
     if (!stage.autoSize) return
@@ -807,16 +815,22 @@ export default function App({
    * 素材のほうが短ければ、余った分は何も映らない(下地の色 = 既定は黒)。
    */
   const replaceSelection = useCallback(
-    async (file) => {
+    async (file, ids) => {
       const kind = kindOf(file)
       if (kind !== 'video' && kind !== 'image') {
         say('差し替えには動画か画像を選んでください', 'error')
         return
       }
-      const sel = selectionRef.current
+      // ids はアニメーション側から戻ってきたとき(選択ではなく、作りに行ったクリップを差し替える)
+      const sel = ids ?? selectionRef.current
       const targets = tracksRef.current.filter((t) => t.type === 'bg' && t.clips.some((c) => sel.includes(c.id)))
       if (targets.length === 0) {
-        say('差し替える動画 / 画像のクリップを選んでください', 'error')
+        say(
+          ids
+            ? `差し替える先のクリップが見つかりません(消した?)。${file.name} は保存してあるので、手で差し替えられます`
+            : '差し替える動画 / 画像のクリップを選んでください',
+          'error',
+        )
         return
       }
       setBusy({ label: `${file.name} を読み込み中…` })
@@ -858,6 +872,119 @@ export default function App({
       }
     },
     [commit, say, sound],
+  )
+
+  // ---------- 音声付加 ⇄ アニメーション ----------
+  /**
+   * 音声付加側: 選んだ動画 / 画像クリップ1つの中身を、アニメーション側で作りに行く。
+   * 渡すのは参考用の素材だけ(そのクリップと、尺が被っている音声クリップのその範囲)。
+   */
+  const editInAnime = useCallback(() => {
+    const sel = selectionRef.current
+    const hits = tracksRef.current.flatMap((t) =>
+      t.type === 'bg' ? t.clips.filter((c) => sel.includes(c.id)).map((c) => ({ track: t, clip: c })) : [],
+    )
+    if (hits.length !== 1) {
+      say('アニメーションで作る動画 / 画像のクリップを1つだけ選んでください', 'error')
+      return
+    }
+    const { track, clip } = hits[0]
+    const file = track.sources?.[0]
+    if (!file) {
+      say('このクリップの素材の実物が無いので、アニメーション側へ渡せません', 'error')
+      return
+    }
+    const from = clip.start
+    const to = clipEndSec(track, clip)
+    clock.pause()
+    onHandOver?.({
+      mode: 'anime',
+      job: {
+        clipId: clip.id,
+        name: track.name,
+        duration: to - from,
+        projectFps,
+        exportFps,
+        video: { file, in: clip.in, buffer: track.buffer, peaks: track.peaks, gain: track.gain, muted: track.muted },
+        audio: tracksRef.current
+          .filter((t) => t.type === 'audio')
+          .map((t) => ({ track: t, clips: clipsInRange(t, from, to) }))
+          .filter((a) => a.clips.length > 0),
+      },
+    })
+  }, [clock, exportFps, onHandOver, projectFps, say])
+
+  /**
+   * アニメーション側: 渡されたクリップの中身を、ゼロから作りはじめる。
+   * 今の作業は参考用の素材だけのシーンに置き換わる(元に戻すで戻れる)。
+   * 参考用のレイヤーはプレビューで見聞きできるが、書き出しには入らない。
+   */
+  const startJob = useCallback(
+    async (j) => {
+      clock.pause()
+      setExportOpen(false)
+      setAssetsOpen(false)
+      setBusy({ label: `${j.name} を参考用に読み込み中…` })
+      try {
+        const file = j.video.file
+        const src = await loadBackground(file)
+        const ref = {
+          id: nextId('track'),
+          type: 'bg',
+          kind: src.kind,
+          name: `参考: ${j.name}`,
+          fileName: file.name,
+          path: filePath(file),
+          sources: [file],
+          el: src.el,
+          url: src.url,
+          width: src.width,
+          height: src.height,
+          duration: src.duration,
+          fit: 'contain',
+          opacity: 1,
+          scale: 1,
+          rotate: 0,
+          x: 0,
+          y: 0,
+          blend: 'source-over',
+          fx: defaultFx(),
+          visible: true,
+          muted: !!j.video.muted,
+          gain: j.video.gain ?? 1,
+          buffer: j.video.buffer ?? null,
+          peaks: j.video.peaks ?? null,
+          reference: true,
+          clips: [{ id: nextId('clip'), start: 0, in: j.video.in, len: j.duration }],
+        }
+        const sounds = j.audio.map((a) => ({
+          ...a.track,
+          id: nextId('track'),
+          name: `参考: ${a.track.name}`,
+          reference: true,
+          clips: a.clips,
+        }))
+        clearFxCache()
+        commit([ref, ...sounds])
+        setSelection([])
+        // 出来上がりを元のクリップと同じ大きさにするため、解像度は参考の動画に合わせる
+        setStage((s) => ({ ...s, autoSize: true }))
+        // コマ送りと書き出しの刻みも音声付加側に揃える(尻をぴったり合わせられるように)
+        setProjectFps(j.projectFps)
+        setExportFps(j.exportFps)
+        setSceneHandle(null)
+        setJobDir(null)
+        setJob({ clipId: j.clipId, name: j.name, duration: j.duration })
+        setExportName(`${j.name.replace(/\.[^.]+$/, '')}-anime`)
+        clock.stop()
+        say(`${j.name} の中身を作ります(${j.duration.toFixed(2)}秒)。参考の動画と音声は書き出しに入りません`)
+      } catch (e) {
+        say(e?.message || '参考用の素材を読み込めませんでした', 'error')
+      } finally {
+        setBusy(null)
+      }
+    },
+    [clock, commit, say],
   )
 
   const nudgeSelection = useCallback(
@@ -1007,9 +1134,13 @@ export default function App({
         setVolume(out.volume)
         if (out.name) changeExportName(out.name)
         clock.stop()
+        // クリップの中身を作っている途中で開いたシーンは、そのままそのクリップへ戻せる(前に作ったものを当てるため)
+        const back = job ? `。右上の「音声付加へ戻す」で「${job.name}」に当てられます` : ''
         say(
           out.skipped.length > 0
-            ? `シーンを復元しました(素材が見つからない${out.skipped.length}レイヤーは飛ばしました)`
+            ? `シーンを復元しました(素材が見つからない${out.skipped.length}レイヤーは飛ばしました)${back}`
+            : job
+              ? `シーンを開きました${back}`
             : bundled
               ? '中に入っていた素材で、シーンを元どおりに復元しました'
               : auto
@@ -1022,7 +1153,7 @@ export default function App({
         setBusy(null)
       }
     },
-    [changeExportName, clock, commit, say],
+    [changeExportName, clock, commit, job, say],
   )
 
   // ---------- 素材フォルダ ----------
@@ -1150,9 +1281,17 @@ export default function App({
     if (!active || !handoff || handled.current === handoff) return
     handled.current = handoff
     onHandoffDone?.()
+    if (handoff.job) {
+      startJob(handoff.job)
+      return
+    }
+    if (handoff.result) {
+      replaceSelection(handoff.result.file, [handoff.result.clipId])
+      return
+    }
     say(`${cfg.label}のシーンなので、${cfg.label}に切り替えました`)
     openScene(handoff.file, handoff.files)
-  }, [active, cfg.label, handoff, onHandoffDone, openScene, say])
+  }, [active, cfg.label, handoff, onHandoffDone, openScene, replaceSelection, say, startJob])
 
   // ---------- ドラッグ＆ドロップ ----------
   const onDropFiles = useCallback(
@@ -1212,7 +1351,7 @@ export default function App({
   }, [])
 
   const openExport = useCallback(() => {
-    if (tracksRef.current.length === 0) {
+    if (outputTracks(tracksRef.current).length === 0) {
       say('書き出す素材がありません', 'error')
       return
     }
@@ -1244,18 +1383,31 @@ export default function App({
   }, [])
 
   const chooseExportDir = useCallback(async () => {
+    // クリップの中身を作っているあいだは、その作業だけの保存先(いつもの保存先は変えない)
+    if (job) {
+      const picked = await pickExportDirectory({ remember: false })
+      if (picked) {
+        setJobDir(picked)
+        setAskWhere(false)
+      }
+      return
+    }
     const picked = await pickExportDirectory()
     if (picked) {
       setExportDir(picked)
       setSceneHandle(null)
       setAskWhere(false)
     }
-  }, [])
+  }, [job])
 
   const dropExportDir = useCallback(async () => {
+    if (job) {
+      setJobDir(null)
+      return
+    }
     await forgetExportDirectory()
     setExportDir(null)
-  }, [])
+  }, [job])
 
   /**
    * 保存に使うフォルダ({ handle, name, granted } か null)を決める。
@@ -1264,8 +1416,9 @@ export default function App({
    * やめたときは AbortError を投げる。
    */
   const resolveSaveDir = useCallback(async () => {
-    let dir = exportDir
-    if (sceneHandle) {
+    let dir = job ? jobDir : exportDir
+    const keep = job ? setJobDir : setExportDir
+    if (sceneHandle && !job) {
       const found = await directoryOfFile(sceneHandle, { request: true, extra: folders.map((f) => f.handle) })
       if (found) {
         dir = found
@@ -1279,14 +1432,14 @@ export default function App({
       const ok = await reauthorizeDirectory(dir.handle)
       if (ok) {
         dir = { ...dir, granted: true }
-        setExportDir(dir)
+        keep(dir)
       } else {
         dir = null
         say('フォルダへの書き込みが許可されなかったので、ダウンロードにします')
       }
     }
     return dir
-  }, [exportDir, folders, sceneHandle, say])
+  }, [exportDir, folders, job, jobDir, sceneHandle, say])
 
   /**
    * 頭から exportFrames 枚を PNG で書き出す。
@@ -1329,7 +1482,7 @@ export default function App({
             height: stage.height,
             bgColor: stage.bgColor,
             checker: false,
-            tracks: tracksRef.current,
+            tracks: outputTracks(tracksRef.current),
           },
           duration: dur,
           fps: exportFps,
@@ -1364,14 +1517,20 @@ export default function App({
     [cfg.filePrefix, clock, exportFps, exportFrames, exportName, resolveSaveDir, say, stage],
   )
 
-  const startExport = useCallback(async () => {
-    const duration = projectDurationSec(tracksRef.current)
-    if (tracksRef.current.length === 0) {
-      say('書き出す素材がありません', 'error')
+  /**
+   * 書き出す。back === true なら MP4 にして、保存したあと音声付加側の元のクリップへ戻す。
+   * クリップの中身を作っているあいだは、尺を元のクリップの長さに揃える。
+   */
+  const startExport = useCallback(async (back) => {
+    const giveBack = back === true && !!job
+    const list = outputTracks(tracksRef.current)
+    if (list.length === 0) {
+      say(job ? 'まだ何も作っていません(参考の素材は書き出しに入りません)' : '書き出す素材がありません', 'error')
       return
     }
+    const duration = job ? job.duration : projectDurationSec(list)
     const dur = duration > 0 ? duration : FALLBACK_DURATION
-    if (format === 'png') {
+    if (format === 'png' && !giveBack) {
       startPngExport(dur)
       return
     }
@@ -1394,7 +1553,7 @@ export default function App({
           height: stage.height,
           bgColor: stage.bgColor,
           checker: false,
-          tracks: tracksRef.current,
+          tracks: list,
         },
         duration: dur,
         fps: exportFps,
@@ -1409,7 +1568,11 @@ export default function App({
           }),
       })
       const ext = (blob.type || '').includes('webm') ? 'webm' : 'mp4'
-      setExportResult({ blob, filename: withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, ext) })
+      setExportResult({
+        blob,
+        filename: withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, ext),
+        back: giveBack ? job : null,
+      })
       say('書き出しが完了しました。保存してください')
     } catch (e) {
       if (e?.name === 'AbortError') say('書き出しをキャンセルしました')
@@ -1418,7 +1581,7 @@ export default function App({
       setBusy(null)
       setFrozen(false)
     }
-  }, [cfg.filePrefix, clock, exportFps, exportName, format, muted, say, stage, startPngExport, volume])
+  }, [cfg.filePrefix, clock, exportFps, exportName, format, job, muted, say, stage, startPngExport, volume])
 
   /**
    * 覚えているフォルダ(あれば許可を取り直して)へ書き出す。
@@ -1449,15 +1612,18 @@ export default function App({
         return
       }
       if (result.folderLost) {
-        setExportDir(null)
-        forgetExportDirectory()
+        if (job) setJobDir(null)
+        else {
+          setExportDir(null)
+          forgetExportDirectory()
+        }
         const where = result.how === 'downloaded' ? 'ダウンロードに' : ''
         say(`保存先フォルダが見つからなかった(動かしたか消した?)ので、${result.name}${size} を${where}保存しました。保存先は選び直してください`)
         return
       }
       say(`${result.name}${size} を保存しました`)
     },
-    [say],
+    [job, say],
   )
 
   const saveExport = useCallback(async () => {
@@ -1467,10 +1633,21 @@ export default function App({
       if (result.how === 'cancelled') return
       setExportResult(null)
       reportSaved(result)
+      // 音声付加側へ戻って、作りに来たクリップをこの動画に差し替えてもらう
+      if (exportResult.back) {
+        const { blob } = exportResult
+        onHandOver?.({
+          mode: 'sound',
+          result: {
+            clipId: exportResult.back.clipId,
+            file: new File([blob], result.name, { type: blob.type || 'video/mp4' }),
+          },
+        })
+      }
     } catch (e) {
       say(e?.message || '保存できませんでした', 'error')
     }
-  }, [exportResult, reportSaved, saveOut, say])
+  }, [exportResult, onHandOver, reportSaved, saveOut, say])
 
   // ---------- シーンの保存と復元 ----------
   const saveScene = useCallback(async () => {
@@ -1584,6 +1761,12 @@ export default function App({
     [stage, tracks, muted, volume, frozen, active],
   )
 
+  // いま効いている保存先(クリップの中身を作っているあいだは、その作業のもの)
+  const saveDir = job ? jobDir : exportDir
+  const sceneFile = job ? undefined : sceneHandle?.name
+  const outDuration =
+    (job ? job.duration : Math.max(projectDurationSec(outputTracks(tracks)), 0)) || FALLBACK_DURATION
+
   return (
     <div className={'app app--' + cfg.id + (compact ? ' app--compact' : '')} hidden={!active}>
       <header className="topbar">
@@ -1606,6 +1789,17 @@ export default function App({
         </div>
         {notice && <div className={'notice notice--' + notice.tone}>{notice.message}</div>}
         <div className="topbar__actions">
+          {job && (
+            <div className="job" title={`音声付加の「${job.name}」の中身を作っています。参考のレイヤーは書き出しに入りません`}>
+              <span className="job__name">🎬 {job.name}({job.duration.toFixed(2)}秒)</span>
+              <button className="primary" disabled={!!busy || frozen} onClick={() => startExport(true)}>
+                音声付加へ戻す
+              </button>
+              <button title="戻さずに、ふつうのアニメーション作業として続ける" onClick={() => setJob(null)}>
+                ✕
+              </button>
+            </div>
+          )}
           {compact && (
             <button
               className={assetsOpen ? 'primary' : ''}
@@ -1683,8 +1877,9 @@ export default function App({
             onForgetFolder={forgetFolder}
           />
           <SaveTargetPanel
-            dir={exportDir}
-            sceneFile={sceneHandle?.name}
+            dir={saveDir}
+            sceneFile={sceneFile}
+            note={job ? `「${job.name}」を作っているあいだの保存先です。アニメーション側のいつもの保存先とは別に選べます。` : null}
             onForgetSceneFile={() => setSceneHandle(null)}
             onPickDir={chooseExportDir}
             onForgetDir={dropExportDir}
@@ -1730,7 +1925,11 @@ export default function App({
             onPaste={paste}
             onDuplicate={duplicateSelection}
             canReplace={tracks.some((t) => t.type === 'bg' && t.clips.some((c) => selection.includes(c.id)))}
-            onReplace={replaceSelection}
+            onReplace={(file) => replaceSelection(file)}
+            canAnimate={
+              tracks.reduce((n, t) => n + (t.type === 'bg' ? t.clips.filter((c) => selection.includes(c.id)).length : 0), 0) === 1
+            }
+            onAnimate={sound ? editInAnime : undefined}
             onUndo={undo}
             onRedo={redo}
             sheetOpen={sheetOpen}
@@ -1760,6 +1959,7 @@ export default function App({
             projectFps={projectFps}
             selection={selection}
             onSelection={setSelection}
+            endMark={job ? job.duration : null}
             onBeginEdit={pushHistory}
             onTracksChange={applyTracks}
             onTrackPatch={(id, patch) =>
@@ -1790,12 +1990,12 @@ export default function App({
           onFormat={setExportFormat}
           frames={exportFrames}
           onFrames={setExportFrames}
-          target={saveTargetLabel(exportDir, askWhere, sceneHandle?.name)}
+          target={saveTargetLabel(saveDir, askWhere, sceneFile)}
           meta={{
             width: stage.width,
             height: stage.height,
-            duration: Math.max(projectDurationSec(tracks), 0) || FALLBACK_DURATION,
-            totalFrames: exportFrameCount(Math.max(projectDurationSec(tracks), 0) || FALLBACK_DURATION, exportFps),
+            duration: outDuration,
+            totalFrames: exportFrameCount(outDuration, exportFps),
             muted,
             ext: 'mp4',
           }}
@@ -1848,12 +2048,16 @@ export default function App({
           <div className="overlay__box">
             <p>書き出しが完了しました</p>
             <p className="hint">{exportResult.filename}</p>
-            {(exportDir || sceneHandle) && (
-              <p className="hint">保存先: {saveTargetLabel(exportDir, askWhere, sceneHandle?.name)}</p>
+            {(saveDir || sceneFile) && (
+              <p className="hint">保存先: {saveTargetLabel(saveDir, askWhere, sceneFile)}</p>
             )}
             <div className="row">
               <button className="primary wide" onClick={saveExport}>
-                {exportDir || sceneHandle ? 'フォルダに保存' : '保存 / 共有'}
+                {exportResult.back
+                  ? '保存して音声付加へ戻す'
+                  : saveDir || sceneFile
+                    ? 'フォルダに保存'
+                    : '保存 / 共有'}
               </button>
               <button className="wide" onClick={() => setExportResult(null)}>
                 閉じる

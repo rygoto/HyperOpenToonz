@@ -85,6 +85,8 @@ function trackJson(t) {
       ...placeJson(t),
       muted: !!t.muted,
       gain: r(t.gain ?? 1),
+      // 参考用に置いてあるだけで、書き出しには入らない
+      ...(t.reference ? { reference: true } : {}),
       fx: normalizeFx(t.fx),
       clips,
     }
@@ -114,6 +116,7 @@ function trackJson(t) {
       ...(t.role ? { role: t.role } : {}),
       gain: r(t.gain),
       muted: !!t.muted,
+      ...(t.reference ? { reference: true } : {}),
       clips,
     }
   }
@@ -198,6 +201,7 @@ function trackIn(t, i) {
       clips,
       muted: !!t.muted,
       gain: Math.max(0, num(t.gain, 1)),
+      reference: !!t.reference,
       fx: normalizeFx(t.fx),
       ...placeIn(t),
     }
@@ -217,7 +221,7 @@ function trackIn(t, i) {
   }
   if (t.type === 'audio') {
     const role = t.role === 'bgm' || t.role === 'se' ? t.role : undefined
-    return { type: 'audio', name, files, paths, clips, role, gain: Math.max(0, num(t.gain, 1)), muted: !!t.muted }
+    return { type: 'audio', name, files, paths, clips, role, gain: Math.max(0, num(t.gain, 1)), muted: !!t.muted, reference: !!t.reference }
   }
   return null
 }
@@ -412,6 +416,7 @@ async function buildTrack(src, files, mode) {
       visible: src.visible,
       muted: src.muted,
       gain: src.gain ?? 1,
+      ...(src.reference ? { reference: true } : {}),
       buffer: sound?.buffer ?? null,
       peaks: sound?.peaks ?? null,
       clips: [],
@@ -470,6 +475,7 @@ async function buildTrack(src, files, mode) {
     role: src.role,
     gain: src.gain,
     muted: src.muted,
+    ...(src.reference ? { reference: true } : {}),
     clips: [],
   }
   track.clips = fitClips(track, src.clips)

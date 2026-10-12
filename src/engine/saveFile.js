@@ -129,11 +129,17 @@ const canWrite = async (handle) => {
   }
 }
 
-/** 保存先フォルダを選んでもらう。次回以降も同じ場所に出せるよう覚えておく */
-export async function pickExportDirectory() {
+/**
+ * 保存先フォルダを選んでもらう。次回以降も同じ場所に出せるよう覚えておく。
+ * remember: false なら今回かぎり(いつもの保存先は書き換えない)。
+ */
+export async function pickExportDirectory({ remember = true } = {}) {
   if (!canPickDirectory()) return null
-  const handle = await window.showDirectoryPicker({ id: 'piyopiyo-export', mode: 'readwrite' })
-  await rememberDirectory(handle)
+  const handle = await window.showDirectoryPicker({
+    id: remember ? 'piyopiyo-export' : 'piyopiyo-job',
+    mode: 'readwrite',
+  })
+  if (remember) await rememberDirectory(handle)
   return { handle, name: handle.name, granted: true }
 }
 

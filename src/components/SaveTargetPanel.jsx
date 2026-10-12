@@ -22,6 +22,7 @@ export default function SaveTargetPanel({
   askWhere,
   onAskWhere,
   simple,
+  note,
 }) {
   const [error, setError] = useState(null)
   const folders = canPickDirectory()
@@ -39,6 +40,7 @@ export default function SaveTargetPanel({
   return (
     <section className="panel">
       <h2 className="panel__title">保存先</h2>
+      {note && <p className="hint">{note}</p>}
 
       {folders ? (
         <>

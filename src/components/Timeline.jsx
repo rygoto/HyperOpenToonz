@@ -120,6 +120,7 @@ export default function Timeline({
   projectFps,
   selection,
   onSelection,
+  endMark = null,
   onBeginEdit,
   onTracksChange,
   onTrackPatch,
@@ -204,6 +205,7 @@ export default function Timeline({
   // ---- スナップ候補 ----
   const snapPoints = (excludeIds) => {
     const pts = [0, st.time]
+    if (endMark != null) pts.push(endMark)
     for (const tr of tracks) {
       for (const c of tr.clips) {
         if (excludeIds.includes(c.id)) continue
@@ -523,6 +525,13 @@ export default function Timeline({
               </div>
             ))}
 
+            {endMark != null && (
+              <div
+                className="tl__end"
+                style={{ left: endMark * pxPerSec }}
+                title="元のクリップの終わり。ここから後ろは書き出されません"
+              />
+            )}
             <div className="tl__playhead" style={{ left: st.time * pxPerSec }} />
           </div>
         </div>

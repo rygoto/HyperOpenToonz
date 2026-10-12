@@ -36,8 +36,12 @@ export const sourceUnits = (t) => {
 export const clipLenSec = (t, c) => c.len / unitsPerSecond(t)
 export const clipEndSec = (t, c) => c.start + clipLenSec(t, c)
 
-/** これ以上短くできない長さ(セルは1コマ、音声は20ms) */
-export const minUnits = (t) => (isCell(t) ? 1 : 0.02)
+/**
+ * これ以上短くできない長さ(どのトラックも 20ms ぶん)。
+ * セルも1コマ未満まで切れる。fps の違う相手(24fps の動画に 8fps のセルなど)と尻を揃えると、
+ * 最後のコマが1コマに満たない長さになるため。
+ */
+export const minUnits = (t) => 0.02 * unitsPerSecond(t)
 
 export function trackEndSec(t) {
   let end = 0
@@ -231,6 +235,24 @@ export function trimTrackTo(track, endSec) {
     ? track
     : replaceClips(track, clips)
 }
+
+/**
+ * from〜to(秒)にかかっているクリップを、その範囲だけに切り詰めて、from を 0 とした位置に直す。
+ * 単位が秒のトラック(背景・音声)用。音声付加側のクリップ1つぶんをアニメーション側へ渡すのに使う。
+ */
+export function clipsInRange(track, from, to) {
+  const out = []
+  for (const c of track.clips) {
+    const s = Math.max(c.start, from)
+    const e = Math.min(clipEndSec(track, c), to)
+    if (e - s < minUnits(track)) continue
+    out.push({ id: nextId('clip'), start: s - from, in: c.in + (s - c.start), len: e - s })
+  }
+  return out
+}
+
+/** 書き出しに入るトラック(参考用に置いてあるだけのものは除く) */
+export const outputTracks = (tracks) => tracks.filter((t) => !t.reference)
 
 /** 貼り付け: 相対位置を保ったまま at を先頭にして並べ直す */
 export function offsetClipsTo(clips, at) {

@@ -27,6 +27,8 @@ export default function Transport({
   onDuplicate,
   canReplace,
   onReplace,
+  canAnimate,
+  onAnimate,
   onUndo,
   onRedo,
   sheetOpen,
@@ -90,6 +92,16 @@ export default function Transport({
         >
           差し替え
         </button>
+        {onAnimate && (
+          <button
+            type="button"
+            title="選んだ動画 / 画像のクリップ1つの中身を、アニメーション側で作る(このクリップと、尺が被っている音声が参考として渡ります)"
+            disabled={!canAnimate}
+            onClick={onAnimate}
+          >
+            アニメーションで作る
+          </button>
+        )}
         <button type="button" title="元に戻す (Ctrl+Z)" onClick={onUndo}>↺</button>
         <button type="button" title="やり直す (Ctrl+Shift+Z)" onClick={onRedo}>↻</button>
         {onSheet && (

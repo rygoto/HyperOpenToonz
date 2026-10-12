@@ -1,4 +1,4 @@
-import { makeClip, replaceClips, sheetLength, sortClips, trackFps } from './timeline.js'
+import { makeClip, minUnits, replaceClips, sheetLength, sortClips, trackFps } from './timeline.js'
 
 /**
  * タイムシート: セルのレイヤーが「何コマ目にどのセルを出すか」の表。
@@ -162,7 +162,7 @@ export function applySheet(track, next) {
     let shift = 0
     for (const m of resized) if (c.start >= m.end - 1e-6) shift += m.delta
     const len = c.in + c.len >= oldLen - 1e-6 ? newLen - c.in : Math.min(c.len, newLen - c.in)
-    if (!(len >= 1)) continue
+    if (!(len >= minUnits(track))) continue
     if (len !== c.len) resized.push({ end: c.start + c.len / fps, delta: (len - c.len) / fps })
     const start = Math.max(0, c.start + shift)
     clips.push(start === c.start && len === c.len ? c : { ...c, start, len })
