@@ -1,5 +1,5 @@
 import { useRef, useState, useSyncExternalStore } from 'react'
-import { cellSheetRow, isCell, sheetLength, trackFps } from '../engine/timeline.js'
+import { cellSheetRow, isCell, sheetLength, sheetRowAtTime, trackFps } from '../engine/timeline.js'
 import {
   EMPTY,
   fillRows,
@@ -34,7 +34,7 @@ function NowRow({ clock, track, rowH }) {
 }
 
 /** レイヤー1つぶんの列。セルが変わる行にだけ番号を出し、止めているあいだは縦線を引く */
-function Column({ track, rows, rowH, lo, hi, focus, typing, clock, onPick, onFill }) {
+function Column({ track, rows, rowH, lo, hi, focus, typing, endRow, clock, onPick, onFill }) {
   const sheet = sheetOf(track)
   const dragging = useRef(false)
   const colRef = useRef(null)
@@ -97,6 +97,15 @@ function Column({ track, rows, rowH, lo, hi, focus, typing, clock, onPick, onFil
       }}
     >
       {cells}
+      {endRow != null && (
+        <div
+          className="xsheet__end"
+          style={{ top: endRow * rowH }}
+          title="元のクリップの終わり。ここから下は書き出されません"
+        >
+          <span>ここまで</span>
+        </div>
+      )}
       <NowRow clock={clock} track={track} rowH={rowH} />
       {fillTo != null && fillTo > hi && (
         <div className="xsheet__fill" style={{ top: (hi + 1) * rowH, height: (fillTo - hi) * rowH }} />
@@ -135,7 +144,7 @@ function Column({ track, rows, rowH, lo, hi, focus, typing, clock, onPick, onFil
  * タイムシート編集。透過セル連番のレイヤーを1列ずつ並べ、何コマ目にどのセルを出すかを直す。
  * 既定は読み込んだ順(1, 2, 3, …)。番号を打ち込むほか、伸ばす / 詰める / 繰り返す / コマ打ちができる。
  */
-export default function SheetPanel({ tracks, selection, clock, onEdit, onClose }) {
+export default function SheetPanel({ tracks, selection, clock, endMark = null, onEdit, onClose }) {
   const coarse = useMatchMedia('(pointer: coarse)')
   const rowH = coarse ? 32 : 22
   const cols = tracks.filter(isCell)
@@ -157,7 +166,10 @@ export default function SheetPanel({ tracks, selection, clock, onEdit, onClose }
   const sheet = track ? sheetOf(track) : []
   const lo = Math.min(sel.anchor, sel.focus)
   const hi = Math.max(sel.anchor, sel.focus)
-  const rows = Math.max(0, ...cols.map(sheetLength)) + SPARE_ROWS
+  // 作っているクリップの終わりが、それぞれの列の何行目に当たるか(endMark が無ければ出さない)
+  const endRows = new Map(cols.map((t) => [t.id, endMark == null ? null : sheetRowAtTime(t, endMark)]))
+  const rows =
+    Math.max(0, ...cols.map(sheetLength), ...cols.map((t) => Math.ceil(endRows.get(t.id) ?? 0))) + SPARE_ROWS
 
   /** その行が映る位置へ再生ヘッドを動かす(プレビューで見ながら直せるように) */
   const seekTo = (t, row) => {
@@ -413,6 +425,7 @@ export default function SheetPanel({ tracks, selection, clock, onEdit, onClose }
                     hi={mine ? hi : -1}
                     focus={mine ? sel.focus : -1}
                     typing={mine ? typing : ''}
+                    endRow={endRows.get(t.id)}
                     clock={clock}
                     onPick={pick}
                     onFill={(to) => run(fillRows(sheet, lo, hi, to))}

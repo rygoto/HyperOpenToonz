@@ -1516,6 +1516,30 @@ input[type="color"] {
   pointer-events: none;
 }
 
+/* 作っているクリップの終わり。ここから下は書き出されない */
+.xsheet__end {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-top: 2px solid #ff4d4d;
+  background: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.4) 0 6px, rgba(0, 0, 0, 0.2) 6px 12px);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.xsheet__end span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 14px;
+  color: #fff;
+  background: #ff4d4d;
+  border-radius: 0 0 4px 0;
+}
+
 /* 引き伸ばしのつまみ(選んだ範囲の右下) */
 .xsheet__tab {
   position: absolute;

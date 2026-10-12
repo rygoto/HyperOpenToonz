@@ -1973,6 +1973,7 @@ export default function App({
             tracks={tracks}
             selection={selection}
             clock={clock}
+            endMark={job ? job.duration : null}
             onEdit={editSheet}
             onClose={() => setSheetOpen(false)}
           />

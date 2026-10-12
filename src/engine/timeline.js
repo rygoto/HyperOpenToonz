@@ -111,6 +111,19 @@ export function cellSheetRow(track, clip, time) {
   return row > last ? last : row
 }
 
+/**
+ * タイムライン上の time が、タイムシートの何行目の頭に当たるか(小数。行の途中なら端数が付く)。
+ * time より前に始まる最後のクリップで数え、そのクリップが time に届いていなくても、そのまま先へ延ばして数える
+ * (「ここまで埋めれば time に届く」を示すため)。当てはまるクリップが無ければ null。
+ */
+export function sheetRowAtTime(track, time) {
+  let hit = null
+  for (const c of track.clips) {
+    if (c.start < time - 1e-6 && (!hit || c.start >= hit.start)) hit = c
+  }
+  return hit ? hit.in + (time - hit.start) * trackFps(track) : null
+}
+
 /** 再生位置 time に表示すべきコマ(track.frames の添字)。範囲外と空セルは null */
 export function cellFrameIndex(track, clip, time) {
   const row = cellSheetRow(track, clip, time)

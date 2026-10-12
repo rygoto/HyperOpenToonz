@@ -62,6 +62,7 @@ import {
   offsetClipsTo,
   projectDurationSec,
   repeatToFill,
+  sheetRowAtTime,
   replaceClipSource,
   rippleFrom,
   sourceUnits,
@@ -1058,4 +1059,15 @@ test('参考用のレイヤーは書き出しに入らず、シーンには印�
   const back = parseScene(sceneToText(doc))
   assert.equal(back.tracks[0].reference, true)
   assert.equal('reference' in doc.tracks[1], false)
+})
+
+test('タイムシートの「ここまで」: クリップの終わりが何行目に当たるかを、届いていなくても数える', () => {
+  const t = cellTrack({ fps: 8 })
+  t.clips = [{ id: 'a', start: 0, in: 0, len: 8 }]
+  assert.ok(Math.abs(sheetRowAtTime(t, 16 / 24) - 16 / 3) < 1e-9) // 5コマと 1/3
+  assert.equal(sheetRowAtTime(t, 2), 16) // 1秒で終わるクリップでも、2秒に届くには16行
+  // 途中から始まるクリップは、その in と位置から数える
+  t.clips = [{ id: 'a', start: 0, in: 0, len: 4 }, { id: 'b', start: 1, in: 2, len: 4 }]
+  assert.equal(sheetRowAtTime(t, 1.5), 6)
+  assert.equal(sheetRowAtTime({ ...t, clips: [{ id: 'c', start: 3, in: 0, len: 4 }] }, 2), null)
 })
