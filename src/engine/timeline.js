@@ -3,7 +3,7 @@ import { nextId } from './ids.js'
 /**
  * トラックとクリップのモデル。
  *
- *   cell  トラック … clip.in / clip.len の単位は「素材のコマ数」
+ *   cell  トラック … clip.in / clip.len の単位は「コマ数」(タイムシートの行)
  *   bg    トラック … 背景 / BOOK。単位は秒(静止画は素材の尺を持たない)
  *   audio トラック … clip.in / clip.len の単位は「秒」
  *
@@ -23,9 +23,12 @@ export const trackFps = (t) => (t.fps > 0 ? t.fps : 24)
 /** clip.in / clip.len の単位を秒に直すための係数 */
 export const unitsPerSecond = (t) => (isCell(t) ? trackFps(t) : 1)
 
+/** セルのレイヤーのタイムシートの行数(sheet を持たなければ読み込んだ枚数。engine/sheet.js) */
+export const sheetLength = (t) => (t.sheet ? t.sheet.length : t.frames.length)
+
 /** 素材全体の長さ(クリップと同じ単位)。静止画は尺を持たないので無限 */
 export const sourceUnits = (t) => {
-  if (isCell(t)) return t.frames.length
+  if (isCell(t)) return sheetLength(t)
   if (isBg(t)) return t.kind === 'video' && t.duration > 0 ? t.duration : Infinity
   return t.duration
 }
@@ -94,14 +97,22 @@ export function bgOverrunSec(track, clip) {
   return Math.min(clip.len, Math.max(0, clip.in + clip.len - track.duration))
 }
 
-/** 再生位置 time に表示すべきコマ。範囲外は null */
-export function cellFrameIndex(track, clip, time) {
+/** 再生位置 time に当たるタイムシートの行。範囲外は null */
+export function cellSheetRow(track, clip, time) {
   const local = time - clip.start
   if (local < 0 || local >= clip.len / trackFps(track)) return null
-  const idx = Math.floor(clip.in + local * trackFps(track) + 1e-6)
-  if (idx < 0) return 0
-  const last = track.frames.length - 1
-  return idx > last ? last : idx
+  const row = Math.floor(clip.in + local * trackFps(track) + 1e-6)
+  if (row < 0) return 0
+  const last = sheetLength(track) - 1
+  return row > last ? last : row
+}
+
+/** 再生位置 time に表示すべきコマ(track.frames の添字)。範囲外と空セルは null */
+export function cellFrameIndex(track, clip, time) {
+  const row = cellSheetRow(track, clip, time)
+  if (row == null || !track.sheet) return row
+  const cell = track.sheet[row]
+  return cell >= 0 && cell < track.frames.length ? cell : null
 }
 
 /** at で2つに割る。割れない位置なら null */

@@ -29,6 +29,8 @@ export default function Transport({
   onReplace,
   onUndo,
   onRedo,
+  sheetOpen,
+  onSheet,
   simple,
 }) {
   const st = useSyncExternalStore(clock.subscribe, clock.getSnapshot)
@@ -90,6 +92,17 @@ export default function Transport({
         </button>
         <button type="button" title="元に戻す (Ctrl+Z)" onClick={onUndo}>↺</button>
         <button type="button" title="やり直す (Ctrl+Shift+Z)" onClick={onRedo}>↻</button>
+        {onSheet && (
+          <button
+            type="button"
+            className={sheetOpen ? 'primary' : ''}
+            aria-pressed={sheetOpen}
+            title="透過PNG連番を、何コマ目にどのセルを出すか編集する"
+            onClick={onSheet}
+          >
+            タイムシート編集
+          </button>
+        )}
       </div>
 
       <label className="chk">

@@ -17,6 +17,7 @@ import { normalizeFx } from './fx.js'
 import { normalizeMode } from '../modes.js'
 import { nextId } from './ids.js'
 import { filePath, loadBackground, loadCellSequence } from './media.js'
+import { EMPTY, isDefaultSheet, normalizeSheet } from './sheet.js'
 import { isBg, makeClip, minUnits, sortClips, sourceUnits } from './timeline.js'
 
 export const SCENE_APP = 'PiyopiyoToonz'
@@ -96,6 +97,8 @@ function trackJson(t) {
       ...assetsJson(t.files ?? [], t.paths),
       source: { count: t.frames.length, width: t.width, height: t.height },
       fps: num(t.fps, 8),
+      // タイムシート(行ごとの files の添字。-1 は空セル)。読み込んだ順のままなら書かない
+      ...(isDefaultSheet(t) ? {} : { sheet: [...t.sheet] }),
       ...placeJson(t),
       fx: normalizeFx(t.fx),
       clips,
@@ -200,7 +203,17 @@ function trackIn(t, i) {
     }
   }
   if (t.type === 'cell') {
-    return { type: 'cell', name, files, paths, clips, fps: Math.max(1, num(t.fps, 8)), fx: normalizeFx(t.fx), ...placeIn(t) }
+    return {
+      type: 'cell',
+      name,
+      files,
+      paths,
+      clips,
+      fps: Math.max(1, num(t.fps, 8)),
+      sheet: Array.isArray(t.sheet) && t.sheet.length > 0 ? normalizeSheet(t.sheet, files.length) : null,
+      fx: normalizeFx(t.fx),
+      ...placeIn(t),
+    }
   }
   if (t.type === 'audio') {
     const role = t.role === 'bgm' || t.role === 'se' ? t.role : undefined
@@ -430,6 +443,14 @@ async function buildTrack(src, files, mode) {
       fx: src.fx,
       visible: src.visible,
       clips: [],
+    }
+    if (src.sheet) {
+      // 表は保存したときの files の添字。欠けた素材があると番号がずれるので、名前で引き直す
+      const at = new Map(seq.names.map((n, i) => [assetKey(n), i]))
+      track.sheet = normalizeSheet(
+        src.sheet.map((cell) => at.get(assetKey(src.files[cell])) ?? EMPTY),
+        seq.frames.length,
+      )
     }
     track.clips = fitClips(track, src.clips)
     return track

@@ -33,11 +33,27 @@ import {
 } from '../src/engine/scene.js'
 import { createClock } from '../src/engine/clock.js'
 import {
+  EMPTY,
+  applySheet,
+  fillRows,
+  holdRows,
+  isDefaultSheet,
+  normalizeSheet,
+  pasteCells,
+  removeRows,
+  repeatRows,
+  reverseRows,
+  setCells,
+  sheetOf,
+  stepRows,
+} from '../src/engine/sheet.js'
+import {
   activeClip,
   bgOverrunSec,
   bgPastEnd,
   bgSourceTime,
   cellFrameIndex,
+  cellSheetRow,
   clipEndSec,
   clipLenSec,
   makeClip,
@@ -923,4 +939,79 @@ test('連動: 尻を動かした位置より後ろのクリップが、全レイ
   assert.deepEqual(shorter[0].clips.map((c) => c.start), [0, 3.5])
   assert.equal(shorter[2].clips[0].start, 4.5)
   assert.equal(rippleFrom(tracks, 5, 0, ['a']), tracks)
+})
+
+test('タイムシート: 持たないレイヤーは読み込んだ順、持てば行ごとのセルを映す(空セルは null)', () => {
+  const t = cellTrack({ frames: new Array(3) })
+  assert.deepEqual(sheetOf(t), [0, 1, 2])
+  assert.equal(isDefaultSheet(t), true)
+
+  const s = applySheet(t, [0, 0, EMPTY, 2, 2, 1])
+  assert.equal(isDefaultSheet(s), false)
+  assert.equal(sourceUnits(s), 6)
+  const c = makeClip(s, { start: 0 })
+  assert.equal(c.len, 6)
+  const seen = []
+  for (let f = 0; f < 6; f++) seen.push(cellFrameIndex(s, c, f / 8))
+  assert.deepEqual(seen, [0, 0, null, 2, 2, 1])
+  assert.equal(cellSheetRow(s, c, 2 / 8), 2)
+})
+
+test('タイムシート: 伸ばす / 詰める / 繰り返す / 逆順 / コマ打ち', () => {
+  const s = [0, 1, 2]
+  assert.deepEqual(holdRows(s, 1, 1), { sheet: [0, 1, 1, 2], a: 1, b: 2 })
+  assert.deepEqual(removeRows(s, 0, 1), { sheet: [2], a: 0, b: 0 })
+  assert.deepEqual(repeatRows(s, 1, 2).sheet, [0, 1, 2, 1, 2])
+  assert.deepEqual(reverseRows(s, 0, 2).sheet, [2, 1, 0])
+  assert.deepEqual(stepRows(s, 0, 2, 2), { sheet: [0, 0, 1, 1, 2, 2], a: 0, b: 5 })
+  // 2コマ打ちを3コマ打ちへ直しても、セルの順番は変わらない
+  assert.deepEqual(stepRows([0, 0, 1, 1], 0, 3, 3).sheet, [0, 0, 0, 1, 1, 1])
+  // 尻より先に入れると、あいだは空セルで埋まる
+  assert.deepEqual(setCells(s, 5, 4, 1).sheet, [0, 1, 2, EMPTY, 1, 1])
+  // 引き伸ばし: 1行ならそのセルを止め、複数行なら並びを繰り返す。後ろは押し出される
+  assert.deepEqual(fillRows(s, 1, 1, 4), { sheet: [0, 1, 1, 1, 1, 2], a: 1, b: 4 })
+  assert.deepEqual(fillRows([0, 1, 2, 2], 0, 1, 5).sheet, [0, 1, 0, 1, 0, 1, 2, 2])
+  assert.equal(fillRows(s, 1, 1, 1).sheet, s)
+  // 上へ引けば縮む(後ろは繰り上がる)。先頭の1行より短くはならない
+  assert.deepEqual(fillRows([0, 0, 0, 1, 2], 0, 2, 0), { sheet: [0, 1, 2], a: 0, b: 0 })
+  assert.deepEqual(fillRows([0, 1, 1, 1, 2], 1, 3, -5), { sheet: [0, 1, 2], a: 1, b: 1 })
+  // 貼り付けは選んだ行から上書き。尻を越えれば伸びる
+  assert.deepEqual(pasteCells(s, 2, [1, 0]), { sheet: [0, 1, 1, 0], a: 2, b: 3 })
+  assert.deepEqual(pasteCells(s, 4, [2]).sheet, [0, 1, 2, EMPTY, 2])
+  // 表の外だけを指していれば何もしない
+  assert.equal(holdRows(s, 7, 9).sheet, s)
+  // 無いセルは空セルになり、尻の空セルは落ちる
+  assert.deepEqual(normalizeSheet([0, 9, 1, EMPTY, null], 3), [0, EMPTY, 1])
+  assert.deepEqual(normalizeSheet([], 3), [EMPTY])
+})
+
+test('タイムシート: 表を伸び縮みさせると、尻まで映していたクリップと後ろのクリップが付いてくる', () => {
+  const t = cellTrack({ frames: new Array(4) })
+  t.clips = [
+    { id: 'a', start: 0, in: 0, len: 4 },
+    { id: 'b', start: 0.5, in: 0, len: 4 },
+    { id: 'c', start: 2, in: 0, len: 2 },
+  ]
+  const longer = applySheet(t, stepRows(sheetOf(t), 0, 3, 2).sheet)
+  assert.deepEqual(longer.clips.map((c) => [c.id, c.start, c.len]), [
+    ['a', 0, 8],
+    ['b', 1, 8], // a のすぐ後ろに並べてあったので、a が伸びたぶん繰り下がる
+    ['c', 3, 2], // a と b が 0.5秒ずつ伸びたぶん。途中までのクリップは長さを保つ
+  ])
+
+  const shorter = applySheet(longer, [3])
+  assert.deepEqual(shorter.clips.map((c) => [c.id, c.len]), [['a', 1], ['b', 1], ['c', 1]])
+  assert.equal(applySheet(t, [0, 1, 2, 3]), t) // 変わらなければそのまま返す
+})
+
+test('タイムシート: シーンに保存され、読み込んだ順のままなら書かれない', () => {
+  const base = { stage: { width: 100, height: 100 }, projectFps: 24, exportFps: 24, volume: 1 }
+  const plain = cellTrack({ name: 'A', frames: new Array(3), files: ['a1.png', 'a2.png', 'a3.png'] })
+  plain.clips = [whole(plain)]
+  assert.equal('sheet' in serializeScene({ ...base, tracks: [plain] }).tracks[0], false)
+
+  const edited = applySheet(plain, [0, 0, EMPTY, 2])
+  const back = parseScene(sceneToText(serializeScene({ ...base, tracks: [edited] })))
+  assert.deepEqual(back.tracks[0].sheet, [0, 0, EMPTY, 2])
+  assert.equal(back.tracks[0].clips[0].len, 4)
 })

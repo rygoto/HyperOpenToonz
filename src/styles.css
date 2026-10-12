@@ -1299,6 +1299,233 @@ input[type="color"] {
   min-height: 0;
 }
 
+/* ---------- timesheet ---------- */
+
+.xsheet {
+  flex: none;
+  max-width: 50vw;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+.xsheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.xsheet__tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.xsheet__tools button {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.xsheet__tools input[type="number"] {
+  width: 96px;
+}
+
+.xsheet__grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #15151a;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+}
+
+.xsheet__grid:focus-visible {
+  border-color: var(--accent-2);
+}
+
+.xsheet__cols {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  width: max-content;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.xsheet__corner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.xsheet__name {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  min-height: 0;
+  padding: 3px 4px;
+  border: none;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  font-size: 11px;
+  text-align: left;
+}
+
+.xsheet__name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xsheet__name.is-active {
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.xsheet__rows {
+  display: flex;
+  width: max-content;
+}
+
+.xsheet__nums {
+  flex: none;
+}
+
+.xnum {
+  height: var(--xrow);
+  line-height: var(--xrow);
+  padding-right: 8px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--dim);
+  border-bottom: 1px solid #22222a;
+}
+
+/* 6コマごとに区切りを濃くする */
+.xnum:nth-child(6n),
+.xcell:nth-child(6n) {
+  border-bottom-color: #4a4a56;
+}
+
+.xsheet__col {
+  position: relative;
+  flex: none;
+  border-left: 1px solid var(--line);
+  cursor: cell;
+  user-select: none;
+}
+
+.xcell {
+  position: relative;
+  height: var(--xrow);
+  line-height: var(--xrow);
+  padding-right: 8px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: #2c4a36;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.28);
+}
+
+.xcell.is-empty {
+  background: #1c1c22;
+}
+
+.xcell.is-out {
+  background: none;
+  border-bottom-color: #22222a;
+}
+
+/* 同じセルを止めているあいだの縦線 */
+.xcell.is-hold::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 40%;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.xcell.is-selected {
+  background: #2f6f8f;
+}
+
+.xcell.is-selected.is-empty {
+  background: #25404f;
+}
+
+.xcell.is-focus {
+  box-shadow: inset 0 0 0 2px #45e0e6;
+}
+
+.xsheet__now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border: 1px solid var(--danger);
+  background: rgba(255, 107, 107, 0.14);
+  pointer-events: none;
+}
+
+/* 引き伸ばしのつまみ(選んだ範囲の右下) */
+.xsheet__tab {
+  position: absolute;
+  z-index: 1;
+  right: 6px;
+  width: 18px;
+  height: 9px;
+  margin-top: -5px;
+  border: 1px solid #15151a;
+  border-radius: 50%;
+  background: #d8d8de;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.xsheet__tab:hover {
+  background: #45e0e6;
+}
+
+.xsheet__fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border: 1px dashed #45e0e6;
+  border-top: none;
+  background: rgba(69, 224, 230, 0.16);
+  pointer-events: none;
+}
+
+/* 縮めて抜ける行 */
+.xsheet__fill.is-cut {
+  border: 1px dashed var(--danger);
+  background: rgba(255, 107, 107, 0.28);
+}
+
+.xsheet__status {
+  margin: 0;
+}
+
+.xsheet__status.is-error {
+  color: var(--danger);
+}
+
 /* ---------- touch / iPad ---------- */
 
 @media (pointer: coarse) {
@@ -1334,6 +1561,12 @@ input[type="color"] {
 
   .tl__headers {
     width: 148px;
+  }
+
+  .xsheet__tab {
+    width: 30px;
+    height: 16px;
+    margin-top: -8px;
   }
 
   .clip__trim {
@@ -1416,6 +1649,19 @@ input[type="color"] {
 
   .viewer {
     width: 100%;
+  }
+
+  /* 狭い画面ではタイムシートを右から重ねる */
+  .xsheet {
+    position: fixed;
+    z-index: 20;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    max-width: 92vw;
+    padding-top: calc(8px + env(safe-area-inset-top));
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
   }
 }
 

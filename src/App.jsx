@@ -15,12 +15,14 @@ import {
   trackEndSec,
   trimTrackTo,
 } from './engine/timeline.js'
+import { applySheet } from './engine/sheet.js'
 import { filePath, kindOf, loadBackground, loadCellSequence, sortByName } from './engine/media.js'
 import Stage from './components/Stage.jsx'
 import Transport from './components/Transport.jsx'
 import Timeline from './components/Timeline.jsx'
 import BackgroundPanel from './components/BackgroundPanel.jsx'
 import TrackPanel from './components/TrackPanel.jsx'
+import SheetPanel from './components/SheetPanel.jsx'
 import ExportDialog from './components/ExportDialog.jsx'
 import ScenePanel from './components/ScenePanel.jsx'
 import SaveTargetPanel, { saveTargetLabel } from './components/SaveTargetPanel.jsx'
@@ -162,6 +164,9 @@ export default function App({
 
   // シンプル表示: 数値や細かい調整を隠して、作業に要るものだけ出す
   const [simple, setSimple] = useState(loadSimple)
+
+  // タイムシート編集(セル連番のコマ割り)を右側に出しているか
+  const [sheetOpen, setSheetOpen] = useState(false)
 
   // 読み込んだシーン JSON(素材を結び直すのを待っている状態)と、そこまでに集まった素材
   const [sceneDoc, setSceneDoc] = useState(null)
@@ -622,6 +627,16 @@ export default function App({
             : t,
         ),
       ),
+    [commit],
+  )
+
+  /** セルのレイヤーのタイムシートを入れ替える(クリップの長さもそれに合わせる) */
+  const editSheet = useCallback(
+    (id, sheet) =>
+      commit((prev) => {
+        const next = prev.map((t) => (t.id === id && t.type === 'cell' ? applySheet(t, sheet) : t))
+        return next.every((t, i) => t === prev[i]) ? prev : next
+      }),
     [commit],
   )
 
@@ -1718,6 +1733,8 @@ export default function App({
             onReplace={replaceSelection}
             onUndo={undo}
             onRedo={redo}
+            sheetOpen={sheetOpen}
+            onSheet={sound ? undefined : () => setSheetOpen((v) => !v)}
             simple={simple}
           />
           <div
@@ -1750,6 +1767,16 @@ export default function App({
             }
           />
         </main>
+
+        {sheetOpen && !sound && (
+          <SheetPanel
+            tracks={tracks}
+            selection={selection}
+            clock={clock}
+            onEdit={editSheet}
+            onClose={() => setSheetOpen(false)}
+          />
+        )}
       </div>
 
       {exportOpen && !busy && (
