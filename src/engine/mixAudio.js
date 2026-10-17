@@ -82,12 +82,12 @@ export async function mixProjectAudio({ tracks, bgBuffers, duration, volume = 1 
   return ctx.startRendering()
 }
 
+/** どこか1か所でも音が鳴っているか(頭が無音で途中から鳴る尺もあるので、最後まで見る) */
 export function bufferHasSignal(buffer) {
   if (!buffer) return false
-  const n = Math.min(buffer.length, 48000)
   for (let c = 0; c < buffer.numberOfChannels; c++) {
     const d = buffer.getChannelData(c)
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < d.length; i++) {
       if (d[i] !== 0) return true
     }
   }
