@@ -112,6 +112,11 @@ function PlaceBody({ track, onPatch }) {
           </select>
         </label>
       </div>
+
+      <label className="chk">
+        <input type="checkbox" checked={!!track.flipX} onChange={(e) => onPatch({ flipX: e.target.checked })} />
+        ⇆ 左右反転
+      </label>
     </>
   )
 }
@@ -215,7 +220,7 @@ function AudioBody({ track, sound, onPatch, onPatchLive, onBeginEdit, onRepeatFi
   )
 }
 
-/** 音声付加側の動画。見た目はいじらず、動画に入っている音の大きさだけを決める */
+/** 音声付加側の動画に入っている音の大きさを決める */
 function VideoSoundBody({ track, onPatch, onPatchLive, onBeginEdit }) {
   const extracted = !!track.buffer
   return (
@@ -268,7 +273,7 @@ function TrackRow({
   const only = selected.length === 1 ? selected[0] : null
   const visual = isVisual(track)
   const cell = track.type === 'cell'
-  // 音声付加側の動画は、配置や撮影処理を持たない
+  // 音声付加側の動画は配置を持たない(色調・フィルターは撮影処理と同じものをかけられる)
   const picture = visual && !sound
 
   return (
@@ -338,9 +343,10 @@ function TrackRow({
           />
         )}
 
-        {picture && (
+        {visual && (
           <FxPanel
             track={track}
+            title={sound ? '🎨 色調・フィルター' : undefined}
             simple={simple}
             onBeginEdit={onBeginEdit}
             onFx={(fx) => onPatchLive({ fx })}

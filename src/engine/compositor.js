@@ -103,20 +103,23 @@ function shot(track, source, frameKey) {
   return renderFx(source, track.width, track.height, track.fx, track.id, frameKey)
 }
 
-/** 置き場所・不透明度・合成モード・回転を当てはめて1枚描く */
+/** 置き場所・不透明度・合成モード・回転・左右反転を当てはめて1枚描く */
 function drawPlaced(ctx, src, track, cw, ch) {
   const r = placeRect(track, track.width, track.height, cw, ch)
   const angle = trackAngle(track)
+  const flip = !!track.flipX
   ctx.globalAlpha = track.opacity
   ctx.globalCompositeOperation = track.blend
 
-  if (!angle) {
+  if (!angle && !flip) {
     ctx.drawImage(src, r.x, r.y, r.w, r.h)
     return
   }
+  // 反転は枠の中心で返すので、枠(当たり判定)は反転しても変わらない
   ctx.save()
   ctx.translate(r.x + r.w / 2, r.y + r.h / 2)
   ctx.rotate(angle)
+  if (flip) ctx.scale(-1, 1)
   ctx.drawImage(src, -r.w / 2, -r.h / 2, r.w, r.h)
   ctx.restore()
 }

@@ -47,7 +47,7 @@ const pct = (v) => Math.round(v * 100) + '%'
  * 各工程は「入切」と「畳む / 開く」が別。切ったまま中身を用意しておけるし、
  * 効かせたまま畳んで場所を空けられる。シンプル表示ではプリセットだけ出す。
  */
-export default function FxPanel({ track, simple, onFx, onBeginEdit }) {
+export default function FxPanel({ track, title = '🎬 撮影処理', simple, onFx, onBeginEdit }) {
   const fx = normalizeFx(track.fx)
   const filters = canvasFilterSupported()
 
@@ -66,7 +66,7 @@ export default function FxPanel({ track, simple, onFx, onBeginEdit }) {
   return (
     <Fold
       id="fx"
-      title="🎬 撮影処理"
+      title={title}
       meta={active ? 'ON' : 'なし'}
       defaultOpen={false}
       toggle={{
@@ -97,7 +97,7 @@ export default function FxPanel({ track, simple, onFx, onBeginEdit }) {
           onFx(defaultFx())
         }}
       >
-        撮影処理を全部切る
+        {title.replace(/^\S+\s+/, '')}を全部切る
       </button>
 
       {simple ? (
