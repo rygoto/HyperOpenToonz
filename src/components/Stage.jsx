@@ -282,9 +282,8 @@ export default function Stage({
       return
     }
 
-    // 1本目: 触った場所にあるレイヤーへ持ち替える
-    const hit = trackRectAt(view.tracks, view.width, view.height, p.x, p.y)
-    const track = hit?.track ?? target
+    // 1本目: 選んであるレイヤーを動かす(どこを触っても持ち替えない)。何も選んでいなければ触った場所のもの
+    const track = target ?? trackRectAt(view.tracks, view.width, view.height, p.x, p.y)?.track
     if (!track) return
     if (track.id !== grabTrackId) onGrabTrack(track.id)
     onBeginEdit?.()
