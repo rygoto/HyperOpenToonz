@@ -6,10 +6,12 @@ import { markHandle } from '../engine/media.js'
  *   .piyo … 設定と素材の実物をまとめた1ファイル。それだけで元どおりに開ける
  *   JSON  … 設定と素材の名前・パスだけ。絵と音そのものは入らない。
  *           素材フォルダを覚えさせておけば、読み込むときに自動で結び直せる。
+ *   Resolve 用 … FCPXML と素材を入れた ZIP(音声付加側だけ)。DaVinci Resolve でタイムラインとして開ける
  */
 export default function ScenePanel({
   onSave,
   onSaveBundle,
+  onSaveResolve,
   onOpen,
   canSave,
   simple,
@@ -68,6 +70,11 @@ export default function ScenePanel({
       <button className="wide" disabled={!canSave} onClick={onSave}>
         💾 設定だけ保存（JSON）
       </button>
+      {onSaveResolve && (
+        <button className="wide" disabled={!canSave} onClick={onSaveResolve}>
+          🎬 DaVinci Resolve 用に保存（FCPXML）
+        </button>
+      )}
       <button className="wide" onClick={open}>
         📂 シーンを開く（.piyo / JSON）
       </button>
@@ -104,6 +111,8 @@ export default function ScenePanel({
           JSON のほうは軽いかわりに、{sound
             ? 'トラック・音量・タイムラインと素材のファイル名 / パスだけで、映像と音そのものは入りません。'
             : 'レイヤーの重なり順・配置・撮影処理・タイムラインと素材のファイル名 / パスだけで、絵と音そのものは入りません。'}
+          {onSaveResolve &&
+            'Resolve 用は FCPXML と素材を ZIP にまとめたものです。展開して、Resolve の「ファイル → 読み込み → タイムライン」で .fcpxml を開いてください(色のフィルタと合成モードは渡りません)。'}
           {canRemember
             ? '素材フォルダを覚えさせておくと、次に JSON を開いたとき同じ場所の素材を自動で見つけて、そのまま復元します。'
             : 'この端末ではフォルダを覚えられないので、読み込むときに素材を選び直してください。'}

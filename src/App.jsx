@@ -57,6 +57,7 @@ import {
   unpackBundle,
   writeZip,
 } from './engine/bundle.js'
+import { packResolve } from './engine/resolve.js'
 import {
   directoryOfFile,
   discardSaveTarget,
@@ -1682,73 +1683,103 @@ export default function App({
   }, [cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, saveOut, say, stage, volume])
 
   /**
-   * 素材ごと .piyo にまとめて保存する。
+   * 素材の実物を入れた1ファイル(.piyo / Resolve 用 ZIP)を保存する。
    * 保存先はボタンを押したこの操作の中で先に決め、まとめ終わってから書く
    * (まとめるのに時間がかかると、あとからでは保存ダイアログを開けないため)。
+   *   pack(doc, assets, base, onProgress) … 中身を作って Blob を返す
    */
-  const saveBundle = useCallback(async () => {
-    const list = tracksRef.current
-    if (list.length === 0) {
-      say('保存するレイヤーがありません', 'error')
-      return
-    }
-    const { assets, missing } = trackSources(list)
-    if (missing.length > 0) {
-      say(`素材の実物が無いレイヤーがあるのでまとめられません: ${missing.join('、')}`, 'error')
-      return
-    }
+  const saveWithAssets = useCallback(
+    async ({ list, ext, suffix = '', description, pack }) => {
+      if (list.length === 0) {
+        say('保存するレイヤーがありません', 'error')
+        return
+      }
+      const { assets, missing } = trackSources(list)
+      if (missing.length > 0) {
+        say(`素材の実物が無いレイヤーがあるのでまとめられません: ${missing.join('、')}`, 'error')
+        return
+      }
 
-    const filename = withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, BUNDLE_EXT)
-    let target
-    try {
-      const dir = await resolveSaveDir()
-      target = await pickSaveTarget(filename, {
-        dir: dir?.handle ?? null,
-        askWhere,
-        description: 'PiyopiyoToonz シーン(素材入り)',
-        mime: BUNDLE_MIME,
-        ext: BUNDLE_EXT,
+      const base = (exportName || `${cfg.filePrefix}-${fileStamp()}`) + suffix
+      const filename = withExtension(base, ext)
+      let target
+      try {
+        const dir = await resolveSaveDir()
+        target = await pickSaveTarget(filename, {
+          dir: dir?.handle ?? null,
+          askWhere,
+          description,
+          mime: BUNDLE_MIME,
+          ext,
+        })
+      } catch (e) {
+        if (e?.name !== 'AbortError') say(e?.message || 'シーンを保存できませんでした', 'error')
+        return
+      }
+      if (target.how === 'cancelled') return
+
+      const doc = serializeScene({
+        tracks: list,
+        stage,
+        projectFps,
+        exportFps,
+        muted,
+        volume,
+        name: exportName,
+        folders,
+        mode: cfg.id,
       })
-    } catch (e) {
-      if (e?.name !== 'AbortError') say(e?.message || 'シーンを保存できませんでした', 'error')
-      return
-    }
-    if (target.how === 'cancelled') return
-
-    const doc = serializeScene({
-      tracks: list,
-      stage,
-      projectFps,
-      exportFps,
-      muted,
-      volume,
-      name: exportName,
-      folders,
-      mode: cfg.id,
-    })
-    const label = '素材をまとめています…(MB)'
-    setBusy({ label, done: 0, total: 0 })
-    try {
-      let shown = -1
-      const blob = await packBundle(doc, assets, {
-        onProgress: (read, total) => {
+      const label = '素材をまとめています…(MB)'
+      setBusy({ label, done: 0, total: 0 })
+      try {
+        let shown = -1
+        const blob = await pack(doc, assets, sanitizeFilename(base), (read, total) => {
           const done = Math.floor(read / 1e6)
           if (done === shown) return
           shown = done
           setBusy({ label, done, total: Math.max(1, Math.ceil(total / 1e6)) })
-        },
-      })
-      setBusy({ label: '保存しています…' })
-      const result = await writeSaveTarget(target, blob)
-      if (result.how === 'cancelled') return
-      reportSaved(result, `(${(blob.size / 1e6).toFixed(1)}MB)`)
-    } catch (e) {
-      await discardSaveTarget(target)
-      say(e?.message || 'シーンを保存できませんでした', 'error')
-    } finally {
-      setBusy(null)
-    }
-  }, [askWhere, cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, resolveSaveDir, say, stage, volume])
+        })
+        setBusy({ label: '保存しています…' })
+        const result = await writeSaveTarget(target, blob)
+        if (result.how === 'cancelled') return
+        reportSaved(result, `(${(blob.size / 1e6).toFixed(1)}MB)`)
+      } catch (e) {
+        await discardSaveTarget(target)
+        say(e?.message || 'シーンを保存できませんでした', 'error')
+      } finally {
+        setBusy(null)
+      }
+    },
+    [askWhere, cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, resolveSaveDir, say, stage, volume],
+  )
+
+  /** 素材ごと .piyo にまとめて保存する */
+  const saveBundle = useCallback(
+    () =>
+      saveWithAssets({
+        list: tracksRef.current,
+        ext: BUNDLE_EXT,
+        description: 'PiyopiyoToonz シーン(素材入り)',
+        pack: (doc, assets, _base, onProgress) => packBundle(doc, assets, { onProgress }),
+      }),
+    [saveWithAssets],
+  )
+
+  /**
+   * DaVinci Resolve 用に、FCPXML と素材を ZIP にまとめて保存する(音声付加側)。
+   * 参考用のトラックは書き出しと同じく入れない。
+   */
+  const saveResolve = useCallback(
+    () =>
+      saveWithAssets({
+        list: outputTracks(tracksRef.current).filter((t) => t.type === 'bg' || t.type === 'audio'),
+        ext: 'zip',
+        suffix: '-resolve',
+        description: 'DaVinci Resolve 用(FCPXML と素材)',
+        pack: (doc, assets, base, onProgress) => packResolve(doc, assets, base, { onProgress }),
+      }),
+    [saveWithAssets],
+  )
 
   const view = useMemo(
     () => ({
@@ -1871,6 +1902,7 @@ export default function App({
           <ScenePanel
             onSave={saveScene}
             onSaveBundle={saveBundle}
+            onSaveResolve={sound ? saveResolve : undefined}
             onOpen={openScene}
             canSave={tracks.length > 0}
             simple={simple}

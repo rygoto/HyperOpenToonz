@@ -250,8 +250,7 @@ export function trackSources(tracks) {
  * 素材が元の場所から消えていたりして読めなければ、そのファイル名を添えて投げる。
  */
 export async function packBundle(doc, assets, { onProgress } = {}) {
-  const used = new Set()
-  const listed = assets.map((a) => ({ ...a, entry: entryName(a.path, used) }))
+  const listed = listEntries(assets)
   const scene = {
     ...doc,
     // どの素材が ZIP のどこにあるか
@@ -261,6 +260,17 @@ export async function packBundle(doc, assets, { onProgress } = {}) {
     { name: SCENE_ENTRY, blob: new Blob([sceneToText(scene)], { type: 'application/json' }) },
     ...listed.map((a) => ({ name: a.entry, blob: a.file })),
   ]
+  return writeAssetsZip(entries, { onProgress })
+}
+
+/** trackSources の素材それぞれに、ZIP の中に置く名前(entry)を付ける */
+export function listEntries(assets) {
+  const used = new Set()
+  return assets.map((a) => ({ ...a, entry: entryName(a.path, used) }))
+}
+
+/** 素材の実物を含む ZIP を書く。素材が元の場所から消えていたら分かる言葉にして投げる */
+export async function writeAssetsZip(entries, { onProgress } = {}) {
   try {
     return await writeZip(entries, { onProgress })
   } catch (e) {

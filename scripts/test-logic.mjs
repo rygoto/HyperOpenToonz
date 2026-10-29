@@ -1071,3 +1071,39 @@ test('タイムシートの「ここまで」: クリップの終わりが何行
   assert.equal(sheetRowAtTime(t, 1.5), 6)
   assert.equal(sheetRowAtTime({ ...t, clips: [{ id: 'c', start: 3, in: 0, len: 4 }] }, 2), null)
 })
+
+test('Resolve 用: クリップの位置・長さ・配置・音量が FCPXML に入り、ZIP に素材も入る', async () => {
+  const { readZip, trackSources } = await import('../src/engine/bundle.js')
+  const { buildFcpxml, frameDuration, gainDb, packResolve } = await import('../src/engine/resolve.js')
+  const video = markPath(new File([new Uint8Array(400)], 'cut 01.mp4'), 'work/cut 01.mp4')
+  const still = markPath(new File([new Uint8Array(100)], 'logo.png'), 'work/logo.png')
+  const bgm = markPath(new File([new Uint8Array(200)], 'bgm.wav'), 'work/bgm.wav')
+  const tracks = [
+    bgTrack({ id: 'v', kind: 'video', name: 'cut01', fileName: 'cut 01.mp4', path: 'work/cut 01.mp4', sources: [video], width: 1920, height: 1080, duration: 3, gain: 0.5, clips: [{ id: 'k', start: 1, in: 0.5, len: 5 }] }),
+    bgTrack({ id: 'p', name: 'logo', fileName: 'logo.png', path: 'work/logo.png', sources: [still], x: 192, y: -108, scale: 0.5, rotate: 90, flipX: true, opacity: 0.25, clips: [{ id: 'l', start: 0, in: 0, len: 2 }] }),
+    audioTrack({ id: 'b', name: 'BGM', fileName: 'bgm.wav', path: 'work/bgm.wav', sources: [bgm], muted: true, clips: [{ id: 'm', start: 0.5, in: 0, len: 4 }] }),
+  ]
+  const doc = serializeScene({ tracks, stage: { width: 1920, height: 1080 }, projectFps: 24, exportFps: 24, volume: 1, name: 'ep1', mode: 'sound' })
+  const { assets } = trackSources(tracks)
+
+  const xml = buildFcpxml(doc, assets.map((a, i) => ({ ...a, entry: `assets/${['work/cut 01.mp4', 'work/logo.png', 'work/bgm.wav'][i]}` })))
+  // 動画: 1秒目から、素材の 0.5 秒目以降を、素材の尻(3秒)まで = 2.5 秒で切れる
+  assert.match(xml, /<asset-clip ref="r3" lane="1" offset="24\/24s" name="cut01" start="12\/24s" duration="60\/24s">/)
+  assert.match(xml, /<adjust-volume amount="-6.02dB"\/>/)
+  assert.match(xml, /src="\.\/assets\/work\/cut%2001\.mp4"/)
+  // 静止画: 高さを 100 とした位置、上が +、反時計回りが +、左右反転は x の拡大率を負に
+  assert.match(xml, /<video ref="r5" lane="2" offset="0s" name="logo" start="0s" duration="48\/24s">/)
+  assert.match(xml, /<adjust-transform position="17.7778 10" scale="-0.5 0.5" rotation="-90"\/>/)
+  assert.match(xml, /<adjust-blend amount="0.25"\/>/)
+  // 音声: 下側の lane、ミュートは無効にしたクリップ
+  assert.match(xml, /<asset-clip ref="r6" lane="-1" offset="12\/24s" name="BGM" start="0s" duration="96\/24s" enabled="0"\/>/)
+  assert.match(xml, /<sequence format="r1" duration="108\/24s"/)
+
+  assert.deepEqual(frameDuration(29.97), { num: 1001, den: 30000 })
+  assert.deepEqual(frameDuration(30), { num: 1, den: 30 })
+  assert.equal(gainDb(0), -96)
+
+  const zip = await readZip(await packResolve(doc, assets, 'ep1'))
+  assert.deepEqual([...zip.keys()], ['ep1.fcpxml', 'assets/work/cut 01.mp4', 'assets/work/logo.png', 'assets/work/bgm.wav'])
+  assert.throws(() => buildFcpxml({ ...doc, tracks: [] }, []), /クリップがありません/)
+})
