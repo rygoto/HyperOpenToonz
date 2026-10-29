@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { markHandle } from '../engine/media.js'
 
 /**
@@ -7,6 +7,7 @@ import { markHandle } from '../engine/media.js'
  *   JSON  … 設定と素材の名前・パスだけ。絵と音そのものは入らない。
  *           素材フォルダを覚えさせておけば、読み込むときに自動で結び直せる。
  *   Resolve 用 … FCPXML と素材を入れた ZIP(音声付加側だけ)。DaVinci Resolve でタイムラインとして開ける
+ * 音声付加側では、開いたシーンを今のクリップの最後尾へつなげることもできる(onOpen の2つ目に { append })。
  */
 export default function ScenePanel({
   onSave,
@@ -22,6 +23,8 @@ export default function ScenePanel({
   onForgetFolder,
 }) {
   const input = useRef(null)
+  const [how, setHow] = useState('replace')
+  const opts = { append: sound && how === 'append' }
 
   // ファイルの場所(ハンドル)まで取れるときはそちらで開く。同じフォルダへ保存するのに使う
   const open = async () => {
@@ -45,7 +48,7 @@ export default function ScenePanel({
       if (e?.name !== 'AbortError') input.current.click()
       return
     }
-    onOpen(file)
+    onOpen(file, opts)
   }
 
   return (
@@ -59,7 +62,7 @@ export default function ScenePanel({
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0]
-          if (f) onOpen(f)
+          if (f) onOpen(f, opts)
           e.target.value = ''
         }}
       />
@@ -74,6 +77,15 @@ export default function ScenePanel({
         <button className="wide" disabled={!canSave} onClick={onSaveResolve}>
           🎬 DaVinci Resolve 用に保存（FCPXML）
         </button>
+      )}
+      {sound && (
+        <label className="field wide">
+          開き方
+          <select value={how} onChange={(e) => setHow(e.target.value)}>
+            <option value="replace">今の内容と入れ替える</option>
+            <option value="append">今のクリップの後ろにつなげる</option>
+          </select>
+        </label>
       )}
       <button className="wide" onClick={open}>
         📂 シーンを開く（.piyo / JSON）
@@ -113,6 +125,8 @@ export default function ScenePanel({
             : 'レイヤーの重なり順・配置・撮影処理・タイムラインと素材のファイル名 / パスだけで、絵と音そのものは入りません。'}
           {onSaveResolve &&
             'Resolve 用は FCPXML と素材を ZIP にまとめたものです。展開して、Resolve の「ファイル → 読み込み → タイムライン」で .fcpxml を開いてください(色のフィルタと合成モードは渡りません)。'}
+          {sound &&
+            '開き方を「後ろにつなげる」にすると、開いたシーンのトラックを今のクリップの一番後ろから足します(解像度・fps・保存先は今のまま)。'}
           {canRemember
             ? '素材フォルダを覚えさせておくと、次に JSON を開いたとき同じ場所の素材を自動で見つけて、そのまま復元します。'
             : 'この端末ではフォルダを覚えられないので、読み込むときに素材を選び直してください。'}

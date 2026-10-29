@@ -1107,3 +1107,25 @@ test('Resolve 用: クリップの位置・長さ・配置・音量が FCPXML �
   assert.deepEqual([...zip.keys()], ['ep1.fcpxml', 'assets/work/cut 01.mp4', 'assets/work/logo.png', 'assets/work/bgm.wav'])
   assert.throws(() => buildFcpxml({ ...doc, tracks: [] }, []), /クリップがありません/)
 })
+
+test('後ろにつなげて開く: 今のクリップの最後尾からずらし、絵は音声より上、音声は一番後ろに足す', async () => {
+  const { appendTracks } = await import('../src/engine/scene.js')
+  const prev = [
+    bgTrack({ id: 'v1', kind: 'video', duration: 10, clips: [{ id: 'a', start: 0, in: 0, len: 4 }] }),
+    audioTrack({ id: 's1', duration: 10, clips: [{ id: 'b', start: 1, in: 0, len: 5 }] }),
+    // 参考用のトラックは最後尾に数えない
+    audioTrack({ id: 'r', duration: 20, reference: true, clips: [{ id: 'c', start: 0, in: 0, len: 20 }] }),
+  ]
+  const added = [
+    bgTrack({ id: 'v2', kind: 'video', duration: 3, clips: [{ id: 'd', start: 0, in: 0.5, len: 2 }] }),
+    audioTrack({ id: 's2', duration: 3, clips: [{ id: 'e', start: 0.5, in: 0, len: 1 }] }),
+  ]
+  const { tracks, at } = appendTracks(prev, added)
+  assert.equal(at, 6)
+  assert.deepEqual(tracks.map((t) => t.id), ['v1', 'v2', 's1', 'r', 's2'])
+  assert.equal(tracks[1].clips[0].start, 6)
+  assert.equal(tracks[1].clips[0].in, 0.5)
+  assert.equal(tracks[4].clips[0].start, 6.5)
+  // 元のトラックには手を付けない
+  assert.equal(added[0].clips[0].start, 0)
+})

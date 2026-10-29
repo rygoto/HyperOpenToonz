@@ -18,7 +18,7 @@ import { normalizeMode } from '../modes.js'
 import { nextId } from './ids.js'
 import { filePath, loadBackground, loadCellSequence } from './media.js'
 import { EMPTY, isDefaultSheet, normalizeSheet } from './sheet.js'
-import { isBg, makeClip, minUnits, sortClips, sourceUnits } from './timeline.js'
+import { isBg, isVisual, makeClip, minUnits, projectDurationSec, sortClips, sourceUnits } from './timeline.js'
 
 export const SCENE_APP = 'PiyopiyoToonz'
 export const SCENE_KIND = 'scene'
@@ -522,4 +522,19 @@ export async function restoreScene(scene, pool, { onProgress } = {}) {
     volume: scene.project.volume,
     name: scene.project.name,
   }
+}
+
+/**
+ * 組み直したシーンのトラックを、今のタイムラインの最後尾へつなげる(「後ろにつなげて開く」)。
+ * 開いたシーンの 0 秒が、今あるクリップの一番後ろの終わりに来るようにずらす(参考用のトラックは数えない)。
+ * 絵のトラックは今ある絵のトラックのすぐ後ろ(音声より上)に、音声トラックは一番後ろに足す。
+ * 返すのは { tracks, at }(at はずらした秒数)。
+ */
+export function appendTracks(prev, added) {
+  const at = projectDurationSec(prev.filter((t) => !t.reference))
+  const shifted = added.map((t) => ({ ...t, clips: t.clips.map((c) => ({ ...c, start: c.start + at })) }))
+  const next = [...prev]
+  next.splice(prev.findLastIndex(isVisual) + 1, 0, ...shifted.filter(isVisual))
+  next.push(...shifted.filter((t) => !isVisual(t)))
+  return { tracks: next, at }
 }

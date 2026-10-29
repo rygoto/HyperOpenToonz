@@ -33,6 +33,7 @@ import { exportComposedVideo, exportFrameCount, exportPngSequence } from './engi
 import { clearFxCache, defaultFx } from './engine/fx.js'
 import {
   addToPool,
+  appendTracks,
   makePool,
   parseScene,
   poolCoversScene,
@@ -178,6 +179,8 @@ export default function App({
 
   // 読み込んだシーン JSON(素材を結び直すのを待っている状態)と、そこまでに集まった素材
   const [sceneDoc, setSceneDoc] = useState(null)
+  // 結び直し画面で開いているシーンを、後ろにつなげるか
+  const [sceneAppend, setSceneAppend] = useState(false)
   const [scenePool, setScenePool] = useState(null)
 
   // 覚えている素材フォルダ(シーンを開いたとき、ここから自動で結び直す)
@@ -1113,9 +1116,12 @@ export default function App({
     }
   }, [cfg.nameKey])
 
-  /** 素材が揃ったので、今の内容をシーンで置き換える(元に戻すで戻れる) */
+  /**
+   * 素材が揃ったので、今の内容をシーンで置き換える(元に戻すで戻れる)。
+   * append のときは置き換えずに、今のクリップの最後尾へつなげる。ステージ・fps・音量・書き出し名は今のまま
+   */
   const applyScene = useCallback(
-    async (doc, pool, { auto = false, bundled = false } = {}) => {
+    async (doc, pool, { auto = false, bundled = false, append = false } = {}) => {
       if (!doc) return
       setSceneDoc(null)
       setScenePool(null)
@@ -1126,6 +1132,17 @@ export default function App({
         })
         if (out.tracks.length === 0) {
           say('素材が見つからず、復元できませんでした', 'error')
+          return
+        }
+        if (append) {
+          const { tracks: next, at } = appendTracks(tracksRef.current, out.tracks)
+          commit(next)
+          setSelection([])
+          clock.seek(at)
+          say(
+            `${at.toFixed(2)}秒の位置から、シーンを後ろにつなげました` +
+              (out.skipped.length > 0 ? `(素材が見つからない${out.skipped.length}レイヤーは飛ばしました)` : ''),
+          )
           return
         }
         // 中身がそっくり入れ替わるので、焼き溜めた撮影処理はここで手放す
@@ -1224,9 +1241,10 @@ export default function App({
    * JSON のときは、一緒に落ちてきた素材(フォルダごとのドロップなど)と、覚えている素材フォルダの
    * 中身を先に当たってみて、全部そろえば何も訊かずにそのまま復元する。
    * 足りないぶんがあるときだけ、素材を結び直す画面を出す。
+   * append のときは今の内容を残したまま、最後尾へつなげる(保存先も今のシーンのまま)。
    */
   const openScene = useCallback(
-    async (file, withFiles = []) => {
+    async (file, withFiles = [], { append = false } = {}) => {
       let doc
       let bundled = []
       try {
@@ -1249,8 +1267,10 @@ export default function App({
       clock.pause()
       setExportOpen(false)
       setAssetsOpen(false)
-      const sceneFile = file.piyoHandle ?? null
-      setSceneHandle(sceneFile)
+      // 何も無いところへつなげるのは、ふつうに開くのと同じ
+      append = append && tracksRef.current.length > 0
+      const sceneFile = append ? null : (file.piyoHandle ?? null)
+      if (!append) setSceneHandle(sceneFile)
       // 前に使ったことのあるフォルダ(かその中)なら、訊かずにそこを保存先にする
       if (sceneFile) {
         directoryOfFile(sceneFile, { extra: folders.map((f) => f.handle) })
@@ -1271,9 +1291,10 @@ export default function App({
       }
 
       if (poolCoversScene(doc, pool)) {
-        await applyScene(doc, pool, { auto: true, bundled: bundled.length > 0 })
+        await applyScene(doc, pool, { auto: true, bundled: bundled.length > 0, append })
         return
       }
+      setSceneAppend(append)
       setScenePool(pool)
       setSceneDoc(doc)
     },
@@ -1903,7 +1924,7 @@ export default function App({
             onSave={saveScene}
             onSaveBundle={saveBundle}
             onSaveResolve={sound ? saveResolve : undefined}
-            onOpen={openScene}
+            onOpen={(file, opts) => openScene(file, [], opts)}
             canSave={tracks.length > 0}
             simple={simple}
             sound={sound}
@@ -2050,7 +2071,7 @@ export default function App({
           onAddFiles={addSceneFiles}
           onScanFolders={async () => addSceneFiles((await scanFolders(sceneDoc)).files)}
           onRememberFolder={rememberFolder}
-          onRestore={(pool) => applyScene(sceneDoc, pool)}
+          onRestore={(pool) => applyScene(sceneDoc, pool, { append: sceneAppend })}
           sound={sound}
           onClose={() => {
             setSceneDoc(null)
