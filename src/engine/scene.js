@@ -222,7 +222,7 @@ function trackIn(t, i) {
     }
   }
   if (t.type === 'audio') {
-    const role = t.role === 'bgm' || t.role === 'se' ? t.role : undefined
+    const role = t.role === 'bgm' || t.role === 'se' || t.role === 'voice' ? t.role : undefined
     return { type: 'audio', name, files, paths, clips, role, gain: Math.max(0, num(t.gain, 1)), muted: !!t.muted, reference: !!t.reference }
   }
   return null

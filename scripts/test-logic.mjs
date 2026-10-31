@@ -1087,17 +1087,18 @@ test('Resolve 用: クリップの位置・長さ・配置・音量が FCPXML �
   const { assets } = trackSources(tracks)
 
   const xml = buildFcpxml(doc, assets.map((a, i) => ({ ...a, entry: `assets/${['work/cut 01.mp4', 'work/logo.png', 'work/bgm.wav'][i]}` })))
-  // 動画: 1秒目から、素材の 0.5 秒目以降を、素材の尻(3秒)まで = 2.5 秒で切れる
-  assert.match(xml, /<asset-clip ref="r3" lane="1" offset="24\/24s" name="cut01" start="12\/24s" duration="60\/24s">/)
+  // 動画: 1秒目から素材の 0.5 秒目以降で、素材の尻(3秒 = 3.5秒目)で切れる。
+  // 手前の静止画が 0〜2秒にあるので、映像の1本には 2秒目から(素材の 1.5 秒目から)だけ入る
+  assert.match(xml, /<asset-clip ref="r5" offset="48\/24s" name="cut01" start="36\/24s" duration="36\/24s">/)
   assert.match(xml, /<adjust-volume amount="-6.02dB"\/>/)
   assert.match(xml, /src="\.\/assets\/work\/cut%2001\.mp4"/)
   // 静止画: 高さを 100 とした位置、上が +、反時計回りが +、左右反転は x の拡大率を負に
-  assert.match(xml, /<video ref="r5" lane="2" offset="0s" name="logo" start="0s" duration="48\/24s">/)
+  assert.match(xml, /<video ref="r3" offset="0s" name="logo" start="0s" duration="48\/24s">/)
   assert.match(xml, /<adjust-transform position="17.7778 10" scale="-0.5 0.5" rotation="-90"\/>/)
   assert.match(xml, /<adjust-blend amount="0.25"\/>/)
-  // 音声: 下側の lane、ミュートは無効にしたクリップ
-  assert.match(xml, /<asset-clip ref="r6" lane="-1" offset="12\/24s" name="BGM" start="0s" duration="96\/24s" enabled="0"\/>/)
-  assert.match(xml, /<sequence format="r1" duration="108\/24s"/)
+  // 音声: ミュートしたトラックは入らない
+  assert.doesNotMatch(xml, /name="BGM"/)
+  assert.match(xml, /<sequence format="r1" duration="84\/24s"/)
 
   assert.deepEqual(frameDuration(29.97), { num: 1001, den: 30000 })
   assert.deepEqual(frameDuration(30), { num: 1, den: 30 })
@@ -1106,6 +1107,63 @@ test('Resolve 用: クリップの位置・長さ・配置・音量が FCPXML �
   const zip = await readZip(await packResolve(doc, assets, 'ep1'))
   assert.deepEqual([...zip.keys()], ['ep1.fcpxml', 'assets/work/cut 01.mp4', 'assets/work/logo.png', 'assets/work/bgm.wav'])
   assert.throws(() => buildFcpxml({ ...doc, tracks: [] }, []), /クリップがありません/)
+})
+
+test('Resolve 用: 映像は一番手前だけを1本に、音声はタグごとにまとめ、同時に鳴る分だけ段を増やす', async () => {
+  const { buildFcpxml, uncovered } = await import('../src/engine/resolve.js')
+  const file = (name) => new File([new Uint8Array(10)], name)
+  const v = (id, clips, over = {}) =>
+    bgTrack({ id, kind: 'video', name: id, fileName: `${id}.mp4`, path: `${id}.mp4`, sources: [file(`${id}.mp4`)], width: 1920, height: 1080, duration: 20, clips, ...over })
+  const s = (id, role, clips, over = {}) =>
+    audioTrack({ id, name: id, role, fileName: `${id}.wav`, path: `${id}.wav`, sources: [file(`${id}.wav`)], duration: 20, clips, ...over })
+  const tracks = [
+    v('back', [{ id: 'a', start: 0, in: 0, len: 10 }]),
+    v('front', [{ id: 'b', start: 2, in: 1, len: 3 }, { id: 'c', start: 7, in: 0, len: 1 }]),
+    v('hidden', [{ id: 'd', start: 0, in: 0, len: 10 }], { visible: false }),
+    s('bgm', 'bgm', [{ id: 'e', start: 0, in: 0, len: 10 }]),
+    s('se1', 'se', [{ id: 'f', start: 1, in: 0, len: 2 }]),
+    s('se2', undefined, [{ id: 'g', start: 2, in: 0, len: 2 }, { id: 'h', start: 5, in: 0, len: 1 }]),
+    s('voice', 'voice', [{ id: 'i', start: 0, in: 0, len: 1 }]),
+    s('off', 'voice', [{ id: 'j', start: 0, in: 0, len: 1 }], { muted: true }),
+  ]
+  const doc = serializeScene({ tracks, stage: { width: 1920, height: 1080 }, projectFps: 1, exportFps: 1, volume: 1, name: 'x', mode: 'sound' })
+  const paths = ['back.mp4', 'front.mp4', 'bgm.wav', 'se1.wav', 'se2.wav', 'voice.wav']
+  const xml = buildFcpxml(doc, paths.map((p) => ({ path: p, entry: `assets/${p}` })))
+  // 段ごとに、gap でつないだ1本のストーリーライン(0秒から)になる
+  const lanes = Object.fromEntries(
+    [...xml.matchAll(/<spine lane="(-?\d+)" offset="0s">([\s\S]*?)<\/spine>/g)].map(([, lane, body]) => [
+      lane,
+      [...body.matchAll(/<(gap|asset-clip|video) ([^>]*?)\/?>/g)].map(([, tag, raw]) => {
+        const a = Object.fromEntries([...raw.matchAll(/(\w+)="([^"]*)"/g)].map(([, k, v]) => [k, parseInt(v, 10)]))
+        const name = raw.match(/name="(\w+)"/)[1]
+        return tag === 'gap' ? `- ${a.offset}+${a.duration}` : `${name} ${a.offset}+${a.duration} @${a.start}`
+      }),
+    ]),
+  )
+  assert.deepEqual(Object.keys(lanes), ['1', '-1', '-2', '-3', '-4'])
+  assert.deepEqual(lanes['1'], ['back 0+2 @0', 'front 2+3 @1', 'back 5+2 @5', 'front 7+1 @0', 'back 8+2 @8'])
+  assert.deepEqual(lanes['-1'], ['voice 0+1 @0']) // 台詞
+  assert.deepEqual(lanes['-2'], ['- 0+1', 'se1 1+2 @0', '- 3+2', 'se2 5+1 @0']) // SE(タグ無しも)
+  assert.deepEqual(lanes['-3'], ['- 0+2', 'se2 2+2 @0']) // se1 と被る分だけ SE の段が増える
+  assert.deepEqual(lanes['-4'], ['bgm 0+10 @0']) // \\GM
+  assert.doesNotMatch(xml, /name="(hidden|off)"/)
+  assert.deepEqual(uncovered([[2, 5], [7, 8]], 0, 10), [[0, 2], [5, 7], [8, 10]])
+  assert.deepEqual(uncovered([[0, 10]], 3, 4), [])
+})
+
+test('Resolve 用: 展開先を入れると素材を file:// の絶対パスで指す', async () => {
+  const { buildFcpxml, fileUrl, isAbsoluteDir } = await import('../src/engine/resolve.js')
+  assert.equal(fileUrl('C:\\Users\\作品\\'), 'file:///C:/Users/%E4%BD%9C%E5%93%81')
+  assert.equal(fileUrl('/Users/me/a b'), 'file:///Users/me/a%20b')
+  assert.equal(fileUrl('\\\\nas\\share'), 'file://nas/share')
+  assert.ok(isAbsoluteDir('C:\\x') && isAbsoluteDir('/x') && isAbsoluteDir('\\\\nas'))
+  assert.ok(!isAbsoluteDir('作品') && !isAbsoluteDir(''))
+  const bgm = new File([new Uint8Array(10)], 'bgm 1.wav')
+  const tracks = [audioTrack({ id: 'b', name: 'b', fileName: 'bgm 1.wav', path: 'bgm 1.wav', sources: [bgm], clips: [{ id: 'm', start: 0, in: 0, len: 1 }] })]
+  const doc = serializeScene({ tracks, stage: { width: 1920, height: 1080 }, projectFps: 24, exportFps: 24, volume: 1, name: 'x', mode: 'sound' })
+  const listed = [{ path: 'bgm 1.wav', entry: 'assets/bgm 1.wav' }]
+  assert.match(buildFcpxml(doc, listed, { root: 'D:\\ep\\x-resolve' }), /src="file:\/\/\/D:\/ep\/x-resolve\/assets\/bgm%201\.wav"/)
+  assert.match(buildFcpxml(doc, listed), /src="\.\/assets\/bgm%201\.wav"/)
 })
 
 test('後ろにつなげて開く: 今のクリップの最後尾からずらし、絵は音声より上、音声は一番後ろに足す', async () => {

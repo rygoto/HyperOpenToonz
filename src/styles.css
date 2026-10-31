@@ -212,6 +212,10 @@ input[type="color"] {
   color: #ff9cc4;
 }
 
+.layer__meta--voice {
+  color: #9ce0a8;
+}
+
 .topbar__sub {
   color: var(--dim);
   font-size: 11px;
@@ -837,6 +841,12 @@ input[type="color"] {
   background-color: #4f2a3c;
   border-color: #e07ca4;
   color: #ffd6e6;
+}
+
+.clip--voice {
+  background-color: #29452f;
+  border-color: #7cc48a;
+  color: #d6f7dc;
 }
 
 .clip.is-off {

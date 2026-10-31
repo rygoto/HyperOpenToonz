@@ -58,7 +58,7 @@ import {
   unpackBundle,
   writeZip,
 } from './engine/bundle.js'
-import { packResolve } from './engine/resolve.js'
+import { isAbsoluteDir, packResolve } from './engine/resolve.js'
 import {
   directoryOfFile,
   discardSaveTarget,
@@ -92,12 +92,22 @@ const MIN_TIMELINE_H = 96
 const MIN_STAGE_H = 140
 const SPLIT_KEY = 'piyopiyo.timelineHeight'
 const SIMPLE_KEY = 'piyopiyo.simple'
+// Resolve 用 ZIP を置いて展開するフォルダ(絶対パス)
+const RESOLVE_DIR_KEY = 'piyopiyo.resolveDir'
 
 function loadSimple() {
   try {
     return window.localStorage.getItem(SIMPLE_KEY) === '1'
   } catch {
     return false
+  }
+}
+
+function loadResolveDir() {
+  try {
+    return window.localStorage.getItem(RESOLVE_DIR_KEY) || ''
+  } catch {
+    return ''
   }
 }
 
@@ -196,6 +206,7 @@ export default function App({
   const [exportFrames, setExportFrames] = useState(null)
   const [exportDir, setExportDir] = useState(null)
   const [askWhere, setAskWhere] = useState(false)
+  const [resolveDir, setResolveDir] = useState(loadResolveDir)
   // 開いたシーンのファイル。次の保存はこれと同じフォルダへ(保存先のフォルダが決まったら消す)
   const [sceneHandle, setSceneHandle] = useState(null)
 
@@ -1707,10 +1718,11 @@ export default function App({
    * 素材の実物を入れた1ファイル(.piyo / Resolve 用 ZIP)を保存する。
    * 保存先はボタンを押したこの操作の中で先に決め、まとめ終わってから書く
    * (まとめるのに時間がかかると、あとからでは保存ダイアログを開けないため)。
-   *   pack(doc, assets, base, onProgress) … 中身を作って Blob を返す
+   *   pack(doc, assets, base, onProgress, name) … 中身を作って Blob を返す(name は保存するファイル名)
+   *   note(name) … 保存したあとの知らせに添える言葉
    */
   const saveWithAssets = useCallback(
-    async ({ list, ext, suffix = '', description, pack }) => {
+    async ({ list, ext, suffix = '', description, pack, note }) => {
       if (list.length === 0) {
         say('保存するレイヤーがありません', 'error')
         return
@@ -1754,16 +1766,22 @@ export default function App({
       setBusy({ label, done: 0, total: 0 })
       try {
         let shown = -1
-        const blob = await pack(doc, assets, sanitizeFilename(base), (read, total) => {
-          const done = Math.floor(read / 1e6)
-          if (done === shown) return
-          shown = done
-          setBusy({ label, done, total: Math.max(1, Math.ceil(total / 1e6)) })
-        })
+        const blob = await pack(
+          doc,
+          assets,
+          sanitizeFilename(base),
+          (read, total) => {
+            const done = Math.floor(read / 1e6)
+            if (done === shown) return
+            shown = done
+            setBusy({ label, done, total: Math.max(1, Math.ceil(total / 1e6)) })
+          },
+          target.name,
+        )
         setBusy({ label: '保存しています…' })
         const result = await writeSaveTarget(target, blob)
         if (result.how === 'cancelled') return
-        reportSaved(result, `(${(blob.size / 1e6).toFixed(1)}MB)`)
+        reportSaved(result, `(${(blob.size / 1e6).toFixed(1)}MB)${note ? note(result.name) : ''}`)
       } catch (e) {
         await discardSaveTarget(target)
         say(e?.message || 'シーンを保存できませんでした', 'error')
@@ -1789,18 +1807,33 @@ export default function App({
   /**
    * DaVinci Resolve 用に、FCPXML と素材を ZIP にまとめて保存する(音声付加側)。
    * 参考用のトラックは書き出しと同じく入れない。
+   * 素材は「resolveDir\<ZIP の名前>\assets\…」(Windows の「すべて展開」の置き方)を絶対パスで指す。
    */
-  const saveResolve = useCallback(
-    () =>
-      saveWithAssets({
-        list: outputTracks(tracksRef.current).filter((t) => t.type === 'bg' || t.type === 'audio'),
-        ext: 'zip',
-        suffix: '-resolve',
-        description: 'DaVinci Resolve 用(FCPXML と素材)',
-        pack: (doc, assets, base, onProgress) => packResolve(doc, assets, base, { onProgress }),
-      }),
-    [saveWithAssets],
-  )
+  const saveResolve = useCallback(() => {
+    const dir = isAbsoluteDir(resolveDir) ? resolveDir.trim().replace(/[\\/]+$/, '') : ''
+    const sep = dir.includes('\\') ? '\\' : '/'
+    const folderOf = (name) => (dir ? `${dir}${sep}${name.replace(/\.zip$/i, '')}` : '')
+    return saveWithAssets({
+      list: outputTracks(tracksRef.current).filter((t) => t.type === 'bg' || t.type === 'audio'),
+      ext: 'zip',
+      suffix: '-resolve',
+      description: 'DaVinci Resolve 用(FCPXML と素材)',
+      pack: (doc, assets, base, onProgress, name) => packResolve(doc, assets, base, { onProgress, root: folderOf(name) }),
+      note: (name) =>
+        dir
+          ? `。${folderOf(name)} に展開してから開いてください`
+          : '。展開先のフォルダを入れていないので、Resolve では素材の再リンクが要ります',
+    })
+  }, [resolveDir, saveWithAssets])
+
+  const changeResolveDir = useCallback((v) => {
+    setResolveDir(v)
+    try {
+      window.localStorage.setItem(RESOLVE_DIR_KEY, v)
+    } catch {
+      /* 覚えられなくても今回の保存には使える */
+    }
+  }, [])
 
   const view = useMemo(
     () => ({
@@ -1924,6 +1957,8 @@ export default function App({
             onSave={saveScene}
             onSaveBundle={saveBundle}
             onSaveResolve={sound ? saveResolve : undefined}
+            resolveDir={resolveDir}
+            onResolveDir={changeResolveDir}
             onOpen={(file, opts) => openScene(file, [], opts)}
             canSave={tracks.length > 0}
             simple={simple}

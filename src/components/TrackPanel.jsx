@@ -469,7 +469,7 @@ export default function TrackPanel({
           {!simple && (
             <p className="hint">
               mp3 / wav / m4a など。1ファイルが1本の音声トラックになります。ステージへドロップした音声は SE
-              として再生ヘッドの位置に置きます。BGM / SE はあとから切り替えられます。
+              として再生ヘッドの位置に置きます。BGM / SE / 台詞 はあとから切り替えられます。
             </p>
           )}
         </>

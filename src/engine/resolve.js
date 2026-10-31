@@ -5,19 +5,26 @@
  *   <名前>.fcpxml … トラック・クリップの位置と長さ・配置・音量
  *   assets/...    … 動画・画像・音声そのもの(.piyo と同じ置き方)
  * で、展開した fcpxml を Resolve の「ファイル → 読み込み → タイムライン」で開く。
+ * Resolve は素材の相対パスを解決できないので、展開先のフォルダ(絶対パス)を受け取って file:// で書く。
+ * ブラウザからは保存先の絶対パスが分からないため、その場所は使う人に入れてもらう。
  *
  * 置き方は FCPXML の決まりに合わせて直す。
  *   ・時間はタイムラインの fps のコマに丸める
- *   ・映像トラックは重なり順のまま lane 1, 2, …(大きいほど手前)、音声トラックは lane -1, -2, …
+ *   ・段(lane)ごとにクリップを gap でつないだストーリーラインにする(Resolve に段を詰めさせない)
+ *   ・映像は lane 1 の1本だけ。同じ時点に重なったら一番手前のレイヤーのクリップを残し、隠れた分は切る
+ *   ・音声は 台詞 → SE → BGM の順に lane -1, -2, … とタグごとにまとめる。
+ *     同じタグが同時に鳴るときだけ、そのタグの段を増やす。ミュートしたトラックは入れない
  *   ・位置は画面の高さを 100 とした値で、原点は中央、上が +。回転は反時計回りが +
  * 合成モードと撮影処理(色のフィルタなど)は Resolve に同じものが無いので渡さない。
- * 参考用のトラックは書き出しと同じく入れない。
+ * 参考用のトラックと非表示の映像も入れない。
  */
 import { listEntries, writeAssetsZip } from './bundle.js'
 import { pathKey } from './scene.js'
 
 export const RESOLVE_EXT = 'fcpxml'
 const FCPXML_VERSION = '1.8'
+// 音声の段の並び(上から)。タグごとに Resolve 上のトラックがまとまる
+export const RESOLVE_ROLES = ['voice', 'se', 'bgm']
 
 const esc = (v) =>
   String(v ?? '')
@@ -62,8 +69,21 @@ export function gainDb(gain) {
   return Math.max(-96, 20 * Math.log10(g))
 }
 
+const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/')
+
 /** 相対の URL。区切りごとに % で包む */
-const relUrl = (entry) => './' + entry.split('/').map(encodeURIComponent).join('/')
+const relUrl = (entry) => './' + encodePath(entry)
+
+/** 絶対パスらしいか(C:\… / \\サーバ\… / /Users/…) */
+export const isAbsoluteDir = (dir) => /^([A-Za-z]:[\\/]|[\\/])/.test(String(dir ?? '').trim())
+
+/** フォルダの絶対パスを file:// の URL に。Windows の区切り(\)も受け付ける */
+export function fileUrl(dir) {
+  const p = String(dir).trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  if (/^[A-Za-z]:/.test(p)) return 'file:///' + p.slice(0, 2) + encodePath(p.slice(2))
+  if (p.startsWith('//')) return 'file:' + encodePath(p)
+  return 'file://' + encodePath(p.startsWith('/') ? p : '/' + p)
+}
 
 /** fit を Resolve のはめ込み方に。fill(引き伸ばし)は fit にして縦横の拡大率で合わせる */
 function conformOf(t, sw, sh, cw, ch) {
@@ -102,9 +122,10 @@ function volumeParam(gain) {
 
 /**
  * シーン JSON(serializeScene の結果)と、listEntries で付けた素材の置き場所から FCPXML を作る。
+ * root(fcpxml を置くフォルダの絶対パス)があれば素材を file:// で、無ければ相対で指す。
  * 映すクリップが1つも無ければ投げる。
  */
-export function buildFcpxml(doc, listed) {
+export function buildFcpxml(doc, listed, { root } = {}) {
   const fps = doc.project?.exportFps || doc.project?.fps || 24
   const fd = frameDuration(fps)
   const frames = (sec) => Math.round(Math.max(0, Number(sec) || 0) * fps)
@@ -144,7 +165,7 @@ export function buildFcpxml(doc, listed) {
       audioSources: t.type === 'audio' || isVideo ? 1 : undefined,
       audioChannels: t.type === 'audio' || isVideo ? 2 : undefined,
       audioRate: t.type === 'audio' || isVideo ? 48000 : undefined,
-      src: relUrl(entry),
+      src: root ? `${fileUrl(root)}/${encodePath(entry)}` : relUrl(entry),
     })
     resources.push(`<asset${head}/>`)
     assets.set(entry, a)
@@ -153,41 +174,98 @@ export function buildFcpxml(doc, listed) {
 
   const clips = []
   let end = 0
-  let videoLane = 0
-  let audioLane = 0
-  for (const t of tracks) {
-    const lane = t.type === 'bg' ? ++videoLane : --audioLane
-    const a = assetFor(t)
-    for (const c of t.clips ?? []) {
-      const startF = frames(c.start)
-      const inF = a.isImage ? 0 : frames(c.in)
-      let lenF = frames(c.start + c.len) - startF
-      // 素材の尻を越えた分は映すものが無いので切る
-      if (!a.isImage && a.dur > 0) lenF = Math.min(lenF, Math.floor((a.dur - c.in) * fps + 1e-6))
-      if (lenF <= 0) continue
-      end = Math.max(end, startF + lenF)
 
-      const base = {
-        ref: a.id,
-        lane,
-        offset: timeOf(startF, fd),
-        name: t.name,
-        start: timeOf(inF, fd),
-        duration: timeOf(lenF, fd),
+  // クリップの位置・素材の頭・長さをコマで。素材の尻を越えた分は映すものが無いので切る
+  const span = (t, a, c) => {
+    const startF = frames(c.start)
+    const inF = a.isImage ? 0 : frames(c.in)
+    let lenF = frames(c.start + c.len) - startF
+    if (!a.isImage && a.dur > 0) lenF = Math.min(lenF, Math.floor((a.dur - c.in) * fps + 1e-6))
+    return { startF, inF, lenF }
+  }
+  // 段(lane)ごとに置くクリップ。xml は段の中での位置が決まってから作る
+  const put = (lane, t, a, at, inF, len, tag, extra, inner) => {
+    end = Math.max(end, at + len)
+    clips.push({ lane, at, inF, len, image: a.isImage, tag, extra, inner, ref: a.id, name: t.name })
+  }
+
+  // 映像は1本にまとめる。同じ時点に重なったら一番手前(並びの後ろ)のレイヤーだけを残す。
+  // 隠れた部分は切り落とすので、透過や縮小で後ろが見えていても後ろのクリップは入らない
+  const covered = []
+  const videoTracks = tracks.filter((t) => t.type === 'bg' && t.visible !== false)
+  for (const t of [...videoTracks].reverse()) {
+    const a = assetFor(t)
+    const own = []
+    for (const c of t.clips ?? []) {
+      const { startF, inF, lenF } = span(t, a, c)
+      if (lenF <= 0) continue
+      for (const [s, e] of uncovered(covered, startF, startF + lenF)) {
+        const inS = a.isImage ? 0 : inF + (s - startF)
+        if (a.isImage) {
+          put(1, t, a, s, inS, e - s, 'video', {}, videoParams(t, cw, ch))
+        } else {
+          const inner = [...videoParams(t, cw, ch), ...(t.muted ? [] : volumeParam(t.gain * master))]
+          put(1, t, a, s, inS, e - s, 'asset-clip', { srcEnable: t.muted ? 'video' : undefined }, inner)
+        }
       }
-      if (t.type === 'audio') {
-        const inner = volumeParam(t.gain * master)
-        clips.push(element('asset-clip', { ...base, enabled: t.muted ? 0 : undefined }, inner))
-      } else if (a.isImage) {
-        clips.push(element('video', { ...base, enabled: t.visible === false ? 0 : undefined }, videoParams(t, cw, ch)))
-      } else {
-        const inner = [...videoParams(t, cw, ch), ...(t.muted ? [] : volumeParam(t.gain * master))]
-        const off = { enabled: t.visible === false ? 0 : undefined, srcEnable: t.muted ? 'video' : undefined }
-        clips.push(element('asset-clip', { ...base, ...off }, inner))
+      own.push([startF, startF + lenF])
+    }
+    // 同じレイヤーのクリップどうしは隠し合わないので、レイヤーを見終えてから足す
+    for (const r of own) addRange(covered, r)
+  }
+
+  // 音声はタグ(台詞・SE・BGM)ごとにまとめる。ミュートしたトラックは入れない。
+  // 同じタグで同時に鳴るものがあれば、そのタグの段を増やして重ならないように振り分ける
+  let audioLane = 0
+  for (const role of RESOLVE_ROLES) {
+    const items = []
+    for (const t of tracks) {
+      if (t.type !== 'audio' || t.muted || roleOf(t) !== role) continue
+      const a = assetFor(t)
+      for (const c of t.clips ?? []) {
+        const { startF, inF, lenF } = span(t, a, c)
+        if (lenF > 0) items.push({ t, a, startF, inF, lenF })
       }
     }
+    items.sort((x, y) => x.startF - y.startF)
+    const ends = []
+    for (const it of items) {
+      let k = ends.findIndex((e) => e <= it.startF)
+      if (k < 0) k = ends.push(0) - 1
+      ends[k] = it.startF + it.lenF
+      put(-(audioLane + k + 1), it.t, it.a, it.startF, it.inF, it.lenF, 'asset-clip', {}, volumeParam(it.t.gain * master))
+    }
+    audioLane += ends.length
   }
   if (end <= 0) throw new Error('タイムラインにクリップがありません')
+
+  // 段ごとに、クリップを隙間(gap)でつないだ1本のストーリーラインにする。
+  // ばらばらに置くと Resolve は時間の被らないクリップを空いた段へ詰めてしまうが、
+  // 0秒から始まる1本のかたまりにしておけば段がそのまま Resolve のトラックになる
+  const lanes = [...new Set(clips.map((c) => c.lane))].sort((x, y) => (x > 0) - (y > 0) || Math.abs(x) - Math.abs(y))
+  const storylines = lanes.map((lane) => {
+    const items = clips.filter((c) => c.lane === lane).sort((x, y) => x.at - y.at)
+    const out = []
+    let at = 0
+    for (const c of items) {
+      // 同じ段で重なった分(同じレイヤーのクリップどうし)は、後のクリップの頭を切る
+      const cut = Math.max(0, at - c.at)
+      if (cut >= c.len) continue
+      const from = c.at + cut
+      if (from > at) out.push(`<gap${attrs({ name: 'Gap', offset: timeOf(at, fd), start: '0s', duration: timeOf(from - at, fd) })}/>`)
+      const a = {
+        ref: c.ref,
+        offset: timeOf(from, fd),
+        name: c.name,
+        start: timeOf(c.image ? 0 : c.inF + cut, fd),
+        duration: timeOf(c.len - cut, fd),
+        ...c.extra,
+      }
+      out.push(element(c.tag, a, c.inner))
+      at = from + c.len - cut
+    }
+    return element('spine', { lane, offset: '0s' }, out)
+  })
 
   const title = doc.project?.name || 'PiyopiyoToonz'
   const total = timeOf(end, fd)
@@ -204,7 +282,7 @@ export function buildFcpxml(doc, listed) {
     `        <sequence${attrs({ format: 'r1', duration: total, tcStart: '0s', tcFormat: 'NDF', audioLayout: 'stereo', audioRate: '48k' })}>`,
     '          <spine>',
     `            <gap${attrs({ name: 'Gap', offset: '0s', start: '0s', duration: total })}>`,
-    ...clips.map((c) => c.replace(/^/gm, '              ')),
+    ...storylines.map((x) => x.replace(/^/gm, '              ')),
     '            </gap>',
     '          </spine>',
     '        </sequence>',
@@ -216,6 +294,37 @@ export function buildFcpxml(doc, listed) {
   ].join('\n')
 }
 
+/** タグの無い音声(アニメーション側で読んだものなど)は SE として扱う */
+const roleOf = (t) => (RESOLVE_ROLES.includes(t.role) ? t.role : 'se')
+
+/** [from, to) のうち、covered(並んだ区間)に入っていない部分 */
+export function uncovered(covered, from, to) {
+  const out = []
+  let at = from
+  for (const [s, e] of covered) {
+    if (e <= at) continue
+    if (s >= to) break
+    if (s > at) out.push([at, s])
+    at = Math.max(at, e)
+    if (at >= to) break
+  }
+  if (at < to) out.push([at, to])
+  return out
+}
+
+/** covered に区間を足す(並びと重なりのまとめを保つ) */
+function addRange(covered, [from, to]) {
+  covered.push([from, to])
+  covered.sort((x, y) => x[0] - y[0])
+  const merged = []
+  for (const r of covered) {
+    const last = merged[merged.length - 1]
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1])
+    else merged.push([...r])
+  }
+  covered.splice(0, covered.length, ...merged)
+}
+
 function element(tag, a, children) {
   if (children.length === 0) return `<${tag}${attrs(a)}/>`
   return [`<${tag}${attrs(a)}>`, ...children.map((c) => '  ' + c), `</${tag}>`].join('\n')
@@ -224,10 +333,11 @@ function element(tag, a, children) {
 /**
  * FCPXML と素材の実物を1つの ZIP にまとめる。fcpxml は ZIP の一番上に name.fcpxml として置く。
  * assets は trackSources の結果(書き出しに入るトラックの分だけ渡す)。
+ * root は展開したあと fcpxml が置かれるフォルダの絶対パス(buildFcpxml を参照)。
  */
-export async function packResolve(doc, assets, name, { onProgress } = {}) {
+export async function packResolve(doc, assets, name, { onProgress, root } = {}) {
   const listed = listEntries(assets)
-  const xml = buildFcpxml(doc, listed)
+  const xml = buildFcpxml(doc, listed, { root })
   return writeAssetsZip(
     [
       { name: `${name}.${RESOLVE_EXT}`, blob: new Blob([xml], { type: 'application/xml' }) },

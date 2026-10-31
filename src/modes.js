@@ -30,4 +30,4 @@ export const MODE_IDS = Object.keys(MODES)
 export const normalizeMode = (v) => (v === 'sound' ? 'sound' : 'anime')
 
 /** 音声トラックの役割。音声付加側でだけ使う */
-export const ROLE_LABEL = { bgm: 'BGM', se: 'SE' }
+export const ROLE_LABEL = { bgm: 'BGM', se: 'SE', voice: '台詞' }

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { markHandle } from '../engine/media.js'
+import { isAbsoluteDir } from '../engine/resolve.js'
 
 /**
  * シーン(プロジェクト)の保存と読み込み。
@@ -13,6 +14,8 @@ export default function ScenePanel({
   onSave,
   onSaveBundle,
   onSaveResolve,
+  resolveDir = '',
+  onResolveDir,
   onOpen,
   canSave,
   simple,
@@ -78,6 +81,21 @@ export default function ScenePanel({
           🎬 DaVinci Resolve 用に保存（FCPXML）
         </button>
       )}
+      {onSaveResolve && (
+        <label className="field wide">
+          Resolve 用 ZIP を展開するフォルダ
+          <input
+            type="text"
+            value={resolveDir}
+            placeholder="C:\Users\…\作品フォルダ"
+            spellCheck={false}
+            onChange={(e) => onResolveDir(e.target.value)}
+          />
+        </label>
+      )}
+      {onSaveResolve && resolveDir.trim() && !isAbsoluteDir(resolveDir) && (
+        <p className="hint">C:\ や / から始まるフォルダの場所を入れてください</p>
+      )}
       {sound && (
         <label className="field wide">
           開き方
@@ -124,7 +142,7 @@ export default function ScenePanel({
             ? 'トラック・音量・タイムラインと素材のファイル名 / パスだけで、映像と音そのものは入りません。'
             : 'レイヤーの重なり順・配置・撮影処理・タイムラインと素材のファイル名 / パスだけで、絵と音そのものは入りません。'}
           {onSaveResolve &&
-            'Resolve 用は FCPXML と素材を ZIP にまとめたものです。展開して、Resolve の「ファイル → 読み込み → タイムライン」で .fcpxml を開いてください(色のフィルタと合成モードは渡りません)。'}
+            'Resolve 用は FCPXML と素材を ZIP にまとめたものです。ZIP を上の「展開するフォルダ」に置いて「すべて展開」し(ZIP と同じ名前のフォルダができます)、Resolve の「ファイル → 読み込み → タイムライン」で .fcpxml を開いてください。Resolve は素材をそのフォルダの場所で探すので、展開したあとは動かさないでください。映像は重なりの一番手前だけを1本に、音声は台詞・SE・BGM ごとにまとめます(ミュート・非表示のトラック、色のフィルタと合成モードは渡りません)。'}
           {sound &&
             '開き方を「後ろにつなげる」にすると、開いたシーンのトラックを今のクリップの一番後ろから足します(解像度・fps・保存先は今のまま)。'}
           {canRemember
