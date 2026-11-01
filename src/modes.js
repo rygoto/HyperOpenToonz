@@ -31,3 +31,18 @@ export const normalizeMode = (v) => (v === 'sound' ? 'sound' : 'anime')
 
 /** 音声トラックの役割。音声付加側でだけ使う */
 export const ROLE_LABEL = { bgm: 'BGM', se: 'SE', voice: '台詞' }
+
+/** 台詞の話者。名前の代わりに A, B, C … で分ける */
+export const SPEAKERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+export const normalizeSpeaker = (v) => (typeof v === 'string' && SPEAKERS.includes(v.toUpperCase()) ? v.toUpperCase() : undefined)
+
+/** 音声トラックのタグの表示名。台詞は話者まで(「台詞A」など) */
+export function roleLabel(track) {
+  const label = ROLE_LABEL[track.role]
+  if (!label) return undefined
+  return track.role === 'voice' && track.speaker ? label + track.speaker : label
+}
+
+/** トラックの並びで使われている話者(A→Z の順) */
+export const usedSpeakers = (tracks) =>
+  SPEAKERS.filter((s) => tracks.some((t) => t.type === 'audio' && t.role === 'voice' && t.speaker === s))

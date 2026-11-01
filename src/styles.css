@@ -1732,3 +1732,20 @@ input[type="color"] {
   }
 }
 
+
+.speakers {
+  align-items: center;
+}
+
+.speakers__label {
+  flex: none;
+  font-size: 11px;
+  color: var(--dim);
+  padding-right: 4px;
+}
+
+.speakers button {
+  flex: 0 0 auto;
+  min-width: 28px;
+  padding: 4px 6px;
+}

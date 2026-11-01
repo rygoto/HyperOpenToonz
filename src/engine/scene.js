@@ -14,7 +14,7 @@
  */
 import { decodeAudioFile, decodeVideoAudio } from './audio.js'
 import { normalizeFx } from './fx.js'
-import { normalizeMode } from '../modes.js'
+import { normalizeMode, normalizeSpeaker } from '../modes.js'
 import { nextId } from './ids.js'
 import { filePath, loadBackground, loadCellSequence } from './media.js'
 import { EMPTY, isDefaultSheet, normalizeSheet } from './sheet.js'
@@ -115,6 +115,7 @@ function trackJson(t) {
       ...assetsJson([t.fileName ?? t.name], [t.path]),
       source: { duration: r(t.duration) },
       ...(t.role ? { role: t.role } : {}),
+      ...(t.role === 'voice' && t.speaker ? { speaker: t.speaker } : {}),
       gain: r(t.gain),
       muted: !!t.muted,
       ...(t.reference ? { reference: true } : {}),
@@ -223,7 +224,8 @@ function trackIn(t, i) {
   }
   if (t.type === 'audio') {
     const role = t.role === 'bgm' || t.role === 'se' || t.role === 'voice' ? t.role : undefined
-    return { type: 'audio', name, files, paths, clips, role, gain: Math.max(0, num(t.gain, 1)), muted: !!t.muted, reference: !!t.reference }
+    const speaker = role === 'voice' ? normalizeSpeaker(t.speaker) : undefined
+    return { type: 'audio', name, files, paths, clips, role, speaker, gain: Math.max(0, num(t.gain, 1)), muted: !!t.muted, reference: !!t.reference }
   }
   return null
 }
@@ -477,6 +479,7 @@ async function buildTrack(src, files, mode) {
     peaks: decoded.peaks,
     duration: decoded.duration,
     role: src.role,
+    ...(src.speaker ? { speaker: src.speaker } : {}),
     gain: src.gain,
     muted: src.muted,
     ...(src.reference ? { reference: true } : {}),

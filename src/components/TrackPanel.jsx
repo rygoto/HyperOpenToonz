@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { AUDIO_ACCEPT } from '../engine/media.js'
 import { clipLenSec, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
-import { ROLE_LABEL } from '../modes.js'
+import { ROLE_LABEL, SPEAKERS, roleLabel, usedSpeakers } from '../modes.js'
 import Fold from './Fold.jsx'
 import FxPanel from './FxPanel.jsx'
 
@@ -187,7 +187,32 @@ function GainField({ label = '音量', track, onPatch, onPatchLive, onBeginEdit,
   )
 }
 
-function AudioBody({ track, sound, onPatch, onPatchLive, onBeginEdit, onRepeatFill }) {
+/** 台詞の話者を A, B, C … から選ぶ。「＋」で次の文字を足してこのトラックに付ける */
+function SpeakerPicker({ track, speakers, onPatch }) {
+  const shown = SPEAKERS.filter((s) => speakers.includes(s) || s === track.speaker)
+  const last = shown.length ? SPEAKERS.indexOf(shown[shown.length - 1]) : -1
+  const next = SPEAKERS[last + 1]
+  return (
+    <div className="presets speakers" title="話者ごとに Resolve のトラックを分けます">
+      <span className="speakers__label">話者</span>
+      <button className={track.speaker ? '' : 'is-active'} onClick={() => onPatch({ speaker: undefined })}>
+        なし
+      </button>
+      {shown.map((s) => (
+        <button key={s} className={track.speaker === s ? 'is-active' : ''} onClick={() => onPatch({ speaker: s })}>
+          {s}
+        </button>
+      ))}
+      {next && (
+        <button title={`話者 ${next} を足してこのトラックに付ける`} onClick={() => onPatch({ speaker: next })}>
+          ＋
+        </button>
+      )}
+    </div>
+  )
+}
+
+function AudioBody({ track, sound, speakers, onPatch, onPatchLive, onBeginEdit, onRepeatFill }) {
   return (
     <>
       {sound && (
@@ -203,6 +228,7 @@ function AudioBody({ track, sound, onPatch, onPatchLive, onBeginEdit, onRepeatFi
           ))}
         </div>
       )}
+      {sound && track.role === 'voice' && <SpeakerPicker track={track} speakers={speakers} onPatch={onPatch} />}
       <GainField track={track} onPatch={onPatch} onPatchLive={onPatchLive} onBeginEdit={onBeginEdit} />
       <label className="chk">
         <input type="checkbox" checked={track.muted} onChange={(e) => onPatch({ muted: e.target.checked })} />
@@ -249,7 +275,7 @@ function VideoSoundBody({ track, onPatch, onPatchLive, onBeginEdit }) {
 function trackMeta(track, sound) {
   if (track.type === 'cell') return `${track.frames.length}枚 ${track.fps}fps`
   if (track.type === 'bg') return `${KIND_LABEL[track.kind] ?? '背景'} ${track.width}×${track.height}`
-  return (sound && ROLE_LABEL[track.role]) || '音声'
+  return (sound && roleLabel(track)) || '音声'
 }
 
 function TrackRow({
@@ -259,6 +285,7 @@ function TrackRow({
   selection,
   simple,
   sound,
+  speakers,
   onPatch,
   onPatchLive,
   onBeginEdit,
@@ -336,6 +363,7 @@ function TrackRow({
           <AudioBody
             track={track}
             sound={sound}
+            speakers={speakers}
             onPatch={onPatch}
             onPatchLive={onPatchLive}
             onBeginEdit={onBeginEdit}
@@ -418,6 +446,7 @@ export default function TrackPanel({
   onGrab,
 }) {
   const cellInput = useRef(null)
+  const speakers = usedSpeakers(tracks)
   const audioInput = useRef(null)
   // 音声付加側では、同じファイル選択を BGM と SE で使い分ける
   const role = useRef(null)
@@ -504,6 +533,7 @@ export default function TrackPanel({
               selection={selection}
               simple={simple}
               sound={sound}
+              speakers={speakers}
               onPatch={(patch) => onPatch(t.id, patch)}
               onPatchLive={(patch) => onPatchLive(t.id, patch)}
               onBeginEdit={onBeginEdit}

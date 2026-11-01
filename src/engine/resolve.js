@@ -13,6 +13,7 @@
  *   ・段(lane)ごとにクリップを gap でつないだストーリーラインにする(Resolve に段を詰めさせない)
  *   ・映像は lane 1 の1本だけ。同じ時点に重なったら一番手前のレイヤーのクリップを残し、隠れた分は切る
  *   ・音声は 台詞 → SE → BGM の順に lane -1, -2, … とタグごとにまとめる。
+ *     台詞は話者(A, B, …)ごとにも分け、話者 A → B → … → 話者なし の順に並べる。
  *     同じタグが同時に鳴るときだけ、そのタグの段を増やす。ミュートしたトラックは入れない
  *   ・位置は画面の高さを 100 とした値で、原点は中央、上が +。回転は反時計回りが +
  * 合成モードと撮影処理(色のフィルタなど)は Resolve に同じものが無いので渡さない。
@@ -20,6 +21,7 @@
  */
 import { listEntries, writeAssetsZip } from './bundle.js'
 import { pathKey } from './scene.js'
+import { SPEAKERS } from '../modes.js'
 
 export const RESOLVE_EXT = 'fcpxml'
 const FCPXML_VERSION = '1.8'
@@ -214,13 +216,13 @@ export function buildFcpxml(doc, listed, { root } = {}) {
     for (const r of own) addRange(covered, r)
   }
 
-  // 音声はタグ(台詞・SE・BGM)ごとにまとめる。ミュートしたトラックは入れない。
+  // 音声はタグ(台詞は話者ごと・SE・BGM)ごとにまとめる。ミュートしたトラックは入れない。
   // 同じタグで同時に鳴るものがあれば、そのタグの段を増やして重ならないように振り分ける
   let audioLane = 0
-  for (const role of RESOLVE_ROLES) {
+  for (const group of audioGroups(tracks)) {
     const items = []
     for (const t of tracks) {
-      if (t.type !== 'audio' || t.muted || roleOf(t) !== role) continue
+      if (t.type !== 'audio' || t.muted || groupOf(t) !== group) continue
       const a = assetFor(t)
       for (const c of t.clips ?? []) {
         const { startF, inF, lenF } = span(t, a, c)
@@ -296,6 +298,19 @@ export function buildFcpxml(doc, listed, { root } = {}) {
 
 /** タグの無い音声(アニメーション側で読んだものなど)は SE として扱う */
 const roleOf = (t) => (RESOLVE_ROLES.includes(t.role) ? t.role : 'se')
+
+/** 段をまとめる単位。台詞は話者があれば 'voice:A' のように分ける */
+const groupOf = (t) => {
+  const role = roleOf(t)
+  return role === 'voice' && SPEAKERS.includes(t.speaker) ? `voice:${t.speaker}` : role
+}
+
+/** まとめる単位の並び(上から): 台詞A, 台詞B, …, 台詞(話者なし), SE, BGM */
+function audioGroups(tracks) {
+  const used = new Set(tracks.filter((t) => t.type === 'audio').map(groupOf))
+  const voices = SPEAKERS.map((s) => `voice:${s}`).filter((g) => used.has(g))
+  return [...voices, ...RESOLVE_ROLES]
+}
 
 /** [from, to) のうち、covered(並んだ区間)に入っていない部分 */
 export function uncovered(covered, from, to) {

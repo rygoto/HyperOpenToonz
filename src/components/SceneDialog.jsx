@@ -2,14 +2,14 @@ import { useRef, useState } from 'react'
 import { filesFromDataTransfer } from '../engine/media.js'
 import { foundCount } from '../engine/scene.js'
 import { isIPadLike } from '../engine/saveFile.js'
-import { ROLE_LABEL } from '../modes.js'
+import { roleLabel } from '../modes.js'
 
 const TYPE_LABEL = { bg: '背景 / BOOK', cell: 'セル', audio: '音声' }
 
 function typeLabel(track, sound) {
   if (!sound) return TYPE_LABEL[track.type]
   if (track.type === 'bg') return '動画'
-  return ROLE_LABEL[track.role] ?? '音声'
+  return roleLabel(track) ?? '音声'
 }
 
 const canPickFolder = () => !isIPadLike() && 'webkitdirectory' in document.createElement('input')

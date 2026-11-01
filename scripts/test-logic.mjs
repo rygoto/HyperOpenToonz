@@ -1151,6 +1151,32 @@ test('Resolve 用: 映像は一番手前だけを1本に、音声はタグごと
   assert.deepEqual(uncovered([[0, 10]], 3, 4), [])
 })
 
+test('Resolve 用: 台詞は話者(A, B, …)ごとに段を分け、話者なしはその後ろ', async () => {
+  const { buildFcpxml } = await import('../src/engine/resolve.js')
+  const file = (name) => new File([new Uint8Array(10)], name)
+  const s = (id, role, speaker, clips) =>
+    audioTrack({ id, name: id, role, speaker, fileName: `${id}.wav`, path: `${id}.wav`, sources: [file(`${id}.wav`)], duration: 20, clips })
+  const tracks = [
+    s('se', 'se', undefined, [{ id: 'a', start: 0, in: 0, len: 1 }]),
+    s('nobody', 'voice', undefined, [{ id: 'b', start: 0, in: 0, len: 1 }]),
+    s('bLine', 'voice', 'B', [{ id: 'c', start: 0, in: 0, len: 1 }]),
+    s('aLine1', 'voice', 'A', [{ id: 'd', start: 0, in: 0, len: 1 }]),
+    s('aLine2', 'voice', 'A', [{ id: 'e', start: 2, in: 0, len: 1 }]),
+    s('seA', 'se', 'A', [{ id: 'f', start: 0, in: 0, len: 1 }]),
+  ]
+  const doc = serializeScene({ tracks, stage: { width: 1920, height: 1080 }, projectFps: 1, exportFps: 1, volume: 1, name: 'x', mode: 'sound' })
+  // 話者は台詞のときだけ保存する
+  assert.deepEqual(doc.tracks.map((t) => t.speaker), [undefined, undefined, 'B', 'A', 'A', undefined])
+  const xml = buildFcpxml(doc, tracks.map((t) => ({ path: t.path, entry: `assets/${t.path}` })))
+  const lanes = Object.fromEntries(
+    [...xml.matchAll(/<spine lane="(-?\d+)" offset="0s">([\s\S]*?)<\/spine>/g)].map(([, lane, body]) => [
+      lane,
+      [...body.matchAll(/<asset-clip [^>]*?name="(\w+)"/g)].map((m) => m[1]),
+    ]),
+  )
+  assert.deepEqual(lanes, { '-1': ['aLine1', 'aLine2'], '-2': ['bLine'], '-3': ['nobody'], '-4': ['se'], '-5': ['seA'] })
+})
+
 test('Resolve 用: 展開先を入れると素材を file:// の絶対パスで指す', async () => {
   const { buildFcpxml, fileUrl, isAbsoluteDir } = await import('../src/engine/resolve.js')
   assert.equal(fileUrl('C:\\Users\\作品\\'), 'file:///C:/Users/%E4%BD%9C%E5%93%81')
