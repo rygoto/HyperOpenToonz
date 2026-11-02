@@ -46,3 +46,7 @@ export function roleLabel(track) {
 /** トラックの並びで使われている話者(A→Z の順) */
 export const usedSpeakers = (tracks) =>
   SPEAKERS.filter((s) => tracks.some((t) => t.type === 'audio' && t.role === 'voice' && t.speaker === s))
+
+/** 登録済みの話者の一覧を A→Z の順・重複なしにそろえる */
+export const normalizeSpeakerList = (list) =>
+  SPEAKERS.filter((s) => Array.isArray(list) && list.some((v) => normalizeSpeaker(v) === s))

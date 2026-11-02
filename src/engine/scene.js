@@ -14,7 +14,7 @@
  */
 import { decodeAudioFile, decodeVideoAudio } from './audio.js'
 import { normalizeFx } from './fx.js'
-import { normalizeMode, normalizeSpeaker } from '../modes.js'
+import { normalizeMode, normalizeSpeaker, normalizeSpeakerList } from '../modes.js'
 import { nextId } from './ids.js'
 import { filePath, loadBackground, loadCellSequence } from './media.js'
 import { EMPTY, isDefaultSheet, normalizeSheet } from './sheet.js'
@@ -126,7 +126,7 @@ function trackJson(t) {
   return null
 }
 
-export function serializeScene({ tracks, stage, projectFps, exportFps, muted, volume, name, folders, mode }) {
+export function serializeScene({ tracks, stage, projectFps, exportFps, muted, volume, name, folders, mode, speakers }) {
   return {
     app: SCENE_APP,
     kind: SCENE_KIND,
@@ -144,6 +144,8 @@ export function serializeScene({ tracks, stage, projectFps, exportFps, muted, vo
     },
     // 素材を置いてあるフォルダの名前(次に開くときの手がかり。中身は入れない)
     folders: (Array.isArray(folders) ? folders : []).map((f) => str(f?.name ?? f)).filter(Boolean),
+    // 登録した台詞の話者(まだどのトラックにも付けていないものも含む)
+    speakers: normalizeSpeakerList(speakers),
     stage: {
       width: num(stage.width, 1920),
       height: num(stage.height, 1080),
@@ -258,6 +260,7 @@ export function parseScene(text) {
     mode: normalizeMode(data.mode),
     savedAt: str(data.savedAt),
     folders: (Array.isArray(data.folders) ? data.folders : []).map((f) => str(f)).filter(Boolean),
+    speakers: normalizeSpeakerList(data.speakers),
     project: {
       name: str(project.name),
       fps: Math.max(1, num(project.fps, 24)),
@@ -524,6 +527,7 @@ export async function restoreScene(scene, pool, { onProgress } = {}) {
     muted: scene.project.muted,
     volume: scene.project.volume,
     name: scene.project.name,
+    speakers: scene.speakers ?? [],
   }
 }
 

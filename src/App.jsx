@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClock } from './engine/clock.js'
 import { createAudioEngine, decodeAudioFile, decodeVideoAudio } from './engine/audio.js'
-import { MODE_IDS, MODES, ROLE_LABEL } from './modes.js'
+import { MODE_IDS, MODES, ROLE_LABEL, SPEAKERS, normalizeSpeakerList, usedSpeakers } from './modes.js'
 import { nextId } from './engine/ids.js'
 import {
   clipContains,
@@ -165,6 +165,8 @@ export default function App({
   const [exportFps, setExportFps] = useState(24)
   const [muted, setMuted] = useState(false)
   const [volume, setVolume] = useState(1)
+  // 登録した台詞の話者。トラックへの割り当て(track.speaker)とは別に持つ
+  const [registeredSpeakers, setRegisteredSpeakers] = useState([])
   const [busy, setBusy] = useState(null)
   const [notice, setNotice] = useState(null)
   const [assetsOpen, setAssetsOpen] = useState(false)
@@ -254,6 +256,23 @@ export default function App({
     },
     [applyTracks, pushHistory],
   )
+
+  // 話者の候補 = 登録したもの + トラックに付いているもの(古いシーンは登録一覧を持たないため)
+  const speakerList = useMemo(
+    () => normalizeSpeakerList([...registeredSpeakers, ...usedSpeakers(tracks)]),
+    [registeredSpeakers, tracks],
+  )
+  // 「＋」は登録だけ。空いている一番若い文字を足す
+  const addSpeaker = useCallback(() => {
+    const next = SPEAKERS.find((s) => !speakerList.includes(s))
+    if (next) setRegisteredSpeakers(normalizeSpeakerList([...speakerList, next]))
+  }, [speakerList])
+  // 登録の取り消しは、どのトラックにも付いていない話者だけ
+  const removeSpeaker = useCallback((s) => {
+    if (usedSpeakers(tracksRef.current).includes(s)) return false
+    setRegisteredSpeakers((prev) => prev.filter((v) => v !== s))
+    return true
+  }, [])
 
   const undo = useCallback(() => {
     const h = history.current
@@ -1148,6 +1167,7 @@ export default function App({
         if (append) {
           const { tracks: next, at } = appendTracks(tracksRef.current, out.tracks)
           commit(next)
+          setRegisteredSpeakers((prev) => normalizeSpeakerList([...prev, ...out.speakers]))
           setSelection([])
           clock.seek(at)
           say(
@@ -1165,6 +1185,7 @@ export default function App({
         setExportFps(out.exportFps)
         setMuted(out.muted)
         setVolume(out.volume)
+        setRegisteredSpeakers(normalizeSpeakerList(out.speakers))
         if (out.name) changeExportName(out.name)
         clock.stop()
         // クリップの中身を作っている途中で開いたシーンは、そのままそのクリップへ戻せる(前に作ったものを当てるため)
@@ -1702,6 +1723,7 @@ export default function App({
       name: exportName,
       folders,
       mode: cfg.id,
+      speakers: speakerList,
     })
     const blob = new Blob([sceneToText(doc)], { type: 'application/json' })
     const filename = withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, SCENE_EXT)
@@ -1712,7 +1734,7 @@ export default function App({
     } catch (e) {
       say(e?.message || 'シーンを保存できませんでした', 'error')
     }
-  }, [cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, saveOut, say, stage, volume])
+  }, [cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, saveOut, say, speakerList, stage, volume])
 
   /**
    * 素材の実物を入れた1ファイル(.piyo / Resolve 用 ZIP)を保存する。
@@ -1761,6 +1783,7 @@ export default function App({
         name: exportName,
         folders,
         mode: cfg.id,
+        speakers: speakerList,
       })
       const label = '素材をまとめています…(MB)'
       setBusy({ label, done: 0, total: 0 })
@@ -1789,7 +1812,7 @@ export default function App({
         setBusy(null)
       }
     },
-    [askWhere, cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, resolveSaveDir, say, stage, volume],
+    [askWhere, cfg, exportFps, exportName, folders, muted, projectFps, reportSaved, resolveSaveDir, say, speakerList, stage, volume],
   )
 
   /** 素材ごと .piyo にまとめて保存する */
@@ -1946,6 +1969,9 @@ export default function App({
             onRemove={removeTrack}
             onMove={moveTrack}
             onRepeatFill={repeatFill}
+            speakers={speakerList}
+            onAddSpeaker={addSpeaker}
+            onRemoveSpeaker={removeSpeaker}
             grabTrackId={grab ? grabTrackId : null}
             onGrab={(id) => {
               setGrabTrackId(id)

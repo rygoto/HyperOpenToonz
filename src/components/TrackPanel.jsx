@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { AUDIO_ACCEPT } from '../engine/media.js'
 import { clipLenSec, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
-import { ROLE_LABEL, SPEAKERS, roleLabel, usedSpeakers } from '../modes.js'
+import { ROLE_LABEL, roleLabel } from '../modes.js'
 import Fold from './Fold.jsx'
 import FxPanel from './FxPanel.jsx'
 
@@ -187,11 +187,14 @@ function GainField({ label = '音量', track, onPatch, onPatchLive, onBeginEdit,
   )
 }
 
-/** 台詞の話者を A, B, C … から選ぶ。「＋」で次の文字を足してこのトラックに付ける */
-function SpeakerPicker({ track, speakers, onPatch }) {
-  const shown = SPEAKERS.filter((s) => speakers.includes(s) || s === track.speaker)
-  const last = shown.length ? SPEAKERS.indexOf(shown[shown.length - 1]) : -1
-  const next = SPEAKERS[last + 1]
+/**
+ * 台詞の話者を、登録済みの話者から選ぶ。
+ * 「＋」は話者を登録するだけ(空いている一番若い文字)。このトラックへ付けるのは文字のボタンで選ぶ。
+ * 右クリックで、どのトラックにも付いていない話者の登録を取り消す。
+ */
+function SpeakerPicker({ track, speakers, onPatch, onAddSpeaker, onRemoveSpeaker }) {
+  const shown = track.speaker && !speakers.includes(track.speaker) ? [...speakers, track.speaker].sort() : speakers
+  const canAdd = speakers.length < 26
   return (
     <div className="presets speakers" title="話者ごとに Resolve のトラックを分けます">
       <span className="speakers__label">話者</span>
@@ -199,12 +202,21 @@ function SpeakerPicker({ track, speakers, onPatch }) {
         なし
       </button>
       {shown.map((s) => (
-        <button key={s} className={track.speaker === s ? 'is-active' : ''} onClick={() => onPatch({ speaker: s })}>
+        <button
+          key={s}
+          className={track.speaker === s ? 'is-active' : ''}
+          title={`話者 ${s} をこのトラックに付ける(右クリックで登録を取り消し)`}
+          onClick={() => onPatch({ speaker: s })}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            onRemoveSpeaker?.(s)
+          }}
+        >
           {s}
         </button>
       ))}
-      {next && (
-        <button title={`話者 ${next} を足してこのトラックに付ける`} onClick={() => onPatch({ speaker: next })}>
+      {canAdd && (
+        <button title="話者を登録する(このトラックには付けません)" onClick={onAddSpeaker}>
           ＋
         </button>
       )}
@@ -212,7 +224,7 @@ function SpeakerPicker({ track, speakers, onPatch }) {
   )
 }
 
-function AudioBody({ track, sound, speakers, onPatch, onPatchLive, onBeginEdit, onRepeatFill }) {
+function AudioBody({ track, sound, speakers, onAddSpeaker, onRemoveSpeaker, onPatch, onPatchLive, onBeginEdit, onRepeatFill }) {
   return (
     <>
       {sound && (
@@ -228,7 +240,7 @@ function AudioBody({ track, sound, speakers, onPatch, onPatchLive, onBeginEdit, 
           ))}
         </div>
       )}
-      {sound && track.role === 'voice' && <SpeakerPicker track={track} speakers={speakers} onPatch={onPatch} />}
+      {sound && track.role === 'voice' && <SpeakerPicker track={track} speakers={speakers} onPatch={onPatch} onAddSpeaker={onAddSpeaker} onRemoveSpeaker={onRemoveSpeaker} />}
       <GainField track={track} onPatch={onPatch} onPatchLive={onPatchLive} onBeginEdit={onBeginEdit} />
       <label className="chk">
         <input type="checkbox" checked={track.muted} onChange={(e) => onPatch({ muted: e.target.checked })} />
@@ -286,6 +298,8 @@ function TrackRow({
   simple,
   sound,
   speakers,
+  onAddSpeaker,
+  onRemoveSpeaker,
   onPatch,
   onPatchLive,
   onBeginEdit,
@@ -364,6 +378,8 @@ function TrackRow({
             track={track}
             sound={sound}
             speakers={speakers}
+            onAddSpeaker={onAddSpeaker}
+            onRemoveSpeaker={onRemoveSpeaker}
             onPatch={onPatch}
             onPatchLive={onPatchLive}
             onBeginEdit={onBeginEdit}
@@ -442,11 +458,13 @@ export default function TrackPanel({
   onRemove,
   onMove,
   onRepeatFill,
+  speakers = [],
+  onAddSpeaker,
+  onRemoveSpeaker,
   grabTrackId,
   onGrab,
 }) {
   const cellInput = useRef(null)
-  const speakers = usedSpeakers(tracks)
   const audioInput = useRef(null)
   // 音声付加側では、同じファイル選択を BGM と SE で使い分ける
   const role = useRef(null)
@@ -534,6 +552,8 @@ export default function TrackPanel({
               simple={simple}
               sound={sound}
               speakers={speakers}
+              onAddSpeaker={onAddSpeaker}
+              onRemoveSpeaker={onRemoveSpeaker}
               onPatch={(patch) => onPatch(t.id, patch)}
               onPatchLive={(patch) => onPatchLive(t.id, patch)}
               onBeginEdit={onBeginEdit}
