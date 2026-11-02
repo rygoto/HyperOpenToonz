@@ -1262,3 +1262,27 @@ test('音声の分離: 静止画・消音済み・音の無い動画は分けな
   const out = detachAudio(tracks, ['a', 'b', 'c'], { audioFor: () => null, layerFor: () => null })
   assert.equal(out, null)
 })
+
+test('Resolve 用: 音を消した動画は鳴らず、そこから分けた音声は音だけの素材として入る', async () => {
+  const { trackSources } = await import('../src/engine/bundle.js')
+  const { buildFcpxml } = await import('../src/engine/resolve.js')
+  const video = markPath(new File([new Uint8Array(400)], 'cut.mp4'), 'work/cut.mp4')
+  const tracks = [
+    bgTrack({ id: 'v', kind: 'video', name: 'cut', fileName: 'cut.mp4', path: 'work/cut.mp4', sources: [video], width: 1920, height: 1080, duration: 3, muted: true, clips: [{ id: 'k', start: 0, in: 0, len: 3 }] }),
+    audioTrack({ id: 's', name: 'cut の音声', fileName: 'cut.mp4', path: 'work/cut.mp4', sources: [video], duration: 3, clips: [{ id: 'm', start: 0, in: 0, len: 3 }] }),
+  ]
+  const doc = serializeScene({ tracks, stage: { width: 1920, height: 1080 }, projectFps: 24, exportFps: 24, volume: 1, name: 'ep1', mode: 'sound' })
+  const { assets } = trackSources(tracks)
+  assert.equal(assets.length, 1)
+  const xml = buildFcpxml(doc, assets.map((a) => ({ ...a, entry: 'assets/work/cut.mp4' })))
+  const video1 = xml.match(/<asset-clip[^>]*name="cut"[^>]*>[\s\S]*?<\/asset-clip>/)[0]
+  assert.match(video1, /srcEnable="video"/)
+  assert.match(video1, /<adjust-volume amount="-96dB"\/>/)
+  // 同じファイルでも、音声の段からは映像の無い別の素材を指す
+  const assetTags = xml.match(/<asset [^>]*\/>/g)
+  assert.equal(assetTags.length, 2)
+  const audioAsset = assetTags.find((a) => !a.includes('hasVideo'))
+  assert.ok(audioAsset)
+  const ref = audioAsset.match(/id="(r\d+)"/)[1]
+  assert.match(xml, new RegExp(`<asset-clip ref="${ref}"[^>]*name="cut の音声"[^>]*srcEnable="audio"`))
+})
