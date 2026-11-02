@@ -1307,4 +1307,9 @@ test('クリップの名前: シーンに保存して読み戻せ、Resolve で�
   const xml = buildFcpxml(doc, assets.map((a) => ({ ...a, entry: 'assets/work/cut.mp4' })))
   assert.match(xml, /offset="0s" name="カット1"/)
   assert.match(xml, /offset="72\/24s" name="cut"/)
+  // Resolve はクリップ名に素材の名前を使うので、名前付きのクリップは同じファイルを指すその名前の素材を参照する
+  const named = xml.match(/<asset id="(r\d+)" name="カット1"[^>]*src="\.\/assets\/work\/cut\.mp4"/)
+  assert.ok(named)
+  assert.match(xml, new RegExp(`<asset-clip ref="${named[1]}" offset="0s" name="カット1"`))
+  assert.match(xml, /<asset id="r\d+" name="cut\.mp4"/)
 })
