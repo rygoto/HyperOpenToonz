@@ -48,7 +48,7 @@ const str = (v, fallback = '') => (typeof v === 'string' && v ? v : fallback)
 
 /* ---------------- 書き出し ---------------- */
 
-const clipJson = (c) => ({ start: r(c.start), in: r(c.in), len: r(c.len) })
+const clipJson = (c) => ({ start: r(c.start), in: r(c.in), len: r(c.len), ...(c.name ? { name: c.name } : {}) })
 
 /** 絵のレイヤーに共通する、置き方と見え方 */
 const placeJson = (t) => ({
@@ -169,6 +169,7 @@ function clipIn(c) {
     start: Math.max(0, num(c?.start, 0)),
     in: Math.max(0, num(c?.in, 0)),
     len: num(c?.len, 0),
+    ...(typeof c?.name === 'string' && c.name.trim() ? { name: c.name.trim() } : {}),
   }
 }
 
@@ -389,7 +390,7 @@ function fitClips(track, clips) {
     let len = c.len
     if (Number.isFinite(total) && !isBg(track)) len = Math.min(len, total - from)
     if (!(len >= min)) continue
-    out.push({ id: nextId('clip'), start: c.start, in: from, len })
+    out.push({ id: nextId('clip'), start: c.start, in: from, len, ...(c.name ? { name: c.name } : {}) })
   }
   return out.length > 0 ? sortClips(out) : [makeClip(track, { start: 0 })]
 }

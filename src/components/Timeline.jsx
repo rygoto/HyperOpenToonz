@@ -100,7 +100,8 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
       />
       {(track.type === 'audio' || (track.peaks && !track.muted)) && width > 8 && <Wave track={track} clip={clip} width={width} />}
       {voidPx >= 1 && <div className="clip__void" style={{ width: voidPx }} title="素材が終わっているので何も映りません" />}
-      <span className="clip__label">
+      <span className="clip__label" title={clip.name || undefined}>
+        {clip.name && <b className="clip__name">{clip.name}</b>}
         {isCellTrack
           ? `${Math.round(clip.in) + 1}〜${Math.round(clip.in + clip.len)}コマ`
           : `${lenSec.toFixed(2)}s`}

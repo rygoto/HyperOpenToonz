@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { AUDIO_ACCEPT } from '../engine/media.js'
 import { clipLenSec, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
 import { ROLE_LABEL, roleLabel } from '../modes.js'
@@ -27,6 +27,39 @@ function NumberField({ label, value, onChange, step = 1, min, max, suffix }) {
         />
         {suffix && <em>{suffix}</em>}
       </span>
+    </label>
+  )
+}
+
+/**
+ * クリップの名前。打つたびに履歴が積まれないよう、確定(フォーカスを外す / Enter)したときだけ反映する。
+ * Esc で打ちかけを捨てる。空にすると名前を外す(トラックの名前で表示・書き出し)。
+ * 別のクリップを選んだ / 取り消したときは、呼ぶ側が key を変えて作り直す。
+ */
+function ClipNameField({ clip, placeholder, onChange }) {
+  const [draft, setDraft] = useState(clip.name ?? '')
+  const apply = () => {
+    const name = draft.trim()
+    if (name !== (clip.name ?? '')) onChange(name || undefined)
+    else setDraft(clip.name ?? '')
+  }
+  return (
+    <label className="field wide">
+      名前
+      <input
+        type="text"
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={apply}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.currentTarget.blur()
+          else if (e.key === 'Escape') {
+            setDraft(clip.name ?? '')
+            e.currentTarget.blur()
+          }
+        }}
+      />
     </label>
   )
 }
@@ -397,33 +430,41 @@ function TrackRow({
           />
         )}
 
-        {only && !simple && (
-          <Fold id="clip" title="選んだクリップ" meta="尺の微調整">
-            <div className="row">
-              <NumberField
-                label="開始"
-                value={Number(only.start.toFixed(3))}
-                step={0.1}
-                min={0}
-                suffix="s"
-                onChange={(v) => onClipPatch(track.id, only.id, { start: Math.max(0, v) })}
-              />
-              <NumberField
-                label="長さ"
-                value={Number(clipLenSec(track, only).toFixed(3))}
-                step={0.1}
-                min={0.02}
-                suffix="s"
-                onChange={(v) =>
-                  onClipPatch(track.id, only.id, {
-                    len: Math.max(
-                      minUnits(track),
-                      Math.min(v * unitsPerSecond(track), Math.max(sourceUnits(track) - only.in, only.len)),
-                    ),
-                  })
-                }
-              />
-            </div>
+        {only && (
+          <Fold id="clip" title="選んだクリップ" meta={simple ? '名前' : '名前・尺の微調整'}>
+            <ClipNameField
+              key={`${only.id}:${only.name ?? ''}`}
+              clip={only}
+              placeholder={track.name}
+              onChange={(name) => onClipPatch(track.id, only.id, { name })}
+            />
+            {!simple && (
+              <div className="row">
+                <NumberField
+                  label="開始"
+                  value={Number(only.start.toFixed(3))}
+                  step={0.1}
+                  min={0}
+                  suffix="s"
+                  onChange={(v) => onClipPatch(track.id, only.id, { start: Math.max(0, v) })}
+                />
+                <NumberField
+                  label="長さ"
+                  value={Number(clipLenSec(track, only).toFixed(3))}
+                  step={0.1}
+                  min={0.02}
+                  suffix="s"
+                  onChange={(v) =>
+                    onClipPatch(track.id, only.id, {
+                      len: Math.max(
+                        minUnits(track),
+                        Math.min(v * unitsPerSecond(track), Math.max(sourceUnits(track) - only.in, only.len)),
+                      ),
+                    })
+                  }
+                />
+              </div>
+            )}
           </Fold>
         )}
 

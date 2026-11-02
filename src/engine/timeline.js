@@ -295,7 +295,7 @@ export function clipsInRange(track, from, to) {
     const s = Math.max(c.start, from)
     const e = Math.min(clipEndSec(track, c), to)
     if (e - s < minUnits(track)) continue
-    out.push({ id: nextId('clip'), start: s - from, in: c.in + (s - c.start), len: e - s })
+    out.push({ id: nextId('clip'), start: s - from, in: c.in + (s - c.start), len: e - s, ...(c.name ? { name: c.name } : {}) })
   }
   return out
 }

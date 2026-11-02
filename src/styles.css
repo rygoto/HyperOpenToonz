@@ -1749,3 +1749,8 @@ input[type="color"] {
   min-width: 28px;
   padding: 4px 6px;
 }
+
+.clip__name {
+  margin-right: 6px;
+  font-weight: 600;
+}

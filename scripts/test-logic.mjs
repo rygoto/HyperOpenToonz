@@ -1286,3 +1286,25 @@ test('Resolve 用: 音を消した動画は鳴らず、そこから分けた音�
   const ref = audioAsset.match(/id="(r\d+)"/)[1]
   assert.match(xml, new RegExp(`<asset-clip ref="${ref}"[^>]*name="cut の音声"[^>]*srcEnable="audio"`))
 })
+
+test('クリップの名前: シーンに保存して読み戻せ、Resolve ではトラック名より優先される', async () => {
+  const { trackSources } = await import('../src/engine/bundle.js')
+  const { buildFcpxml } = await import('../src/engine/resolve.js')
+  const video = markPath(new File([new Uint8Array(400)], 'cut.mp4'), 'work/cut.mp4')
+  const tracks = [
+    bgTrack({ id: 'v', kind: 'video', name: 'cut', fileName: 'cut.mp4', path: 'work/cut.mp4', sources: [video], width: 1920, height: 1080, duration: 6, clips: [
+      { id: 'a', start: 0, in: 0, len: 3, name: 'カット1' },
+      { id: 'b', start: 3, in: 3, len: 3 },
+    ] }),
+  ]
+  const doc = serializeScene({ tracks, stage: { width: 1920, height: 1080 }, projectFps: 24, exportFps: 24, volume: 1, name: 'ep1', mode: 'sound' })
+  assert.equal(doc.tracks[0].clips[0].name, 'カット1')
+  assert.equal('name' in doc.tracks[0].clips[1], false)
+  const parsed = parseScene(sceneToText(doc))
+  assert.equal(parsed.tracks[0].clips[0].name, 'カット1')
+  assert.equal(parsed.tracks[0].clips[1].name, undefined)
+  const { assets } = trackSources(tracks)
+  const xml = buildFcpxml(doc, assets.map((a) => ({ ...a, entry: 'assets/work/cut.mp4' })))
+  assert.match(xml, /offset="0s" name="カット1"/)
+  assert.match(xml, /offset="72\/24s" name="cut"/)
+})
