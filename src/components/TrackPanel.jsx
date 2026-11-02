@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AUDIO_ACCEPT } from '../engine/media.js'
 import { clipLenSec, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
 import { ROLE_LABEL, roleLabel } from '../modes.js'
@@ -45,7 +45,7 @@ function ClipNameField({ clip, placeholder, onChange }) {
   }
   return (
     <label className="field wide">
-      名前
+      選んだクリップの名前
       <input
         type="text"
         value={draft}
@@ -350,8 +350,18 @@ function TrackRow({
   // 音声付加側の動画は配置を持たない(色調・フィルターは撮影処理と同じものをかけられる)
   const picture = visual && !sound
 
+  // タイムラインでクリップを1つ選んだら、そのトラックを開いて名前の欄を見えるところへ出す
+  const rowRef = useRef(null)
+  const clipRef = useRef(null)
+  const onlyId = only?.id
+  useEffect(() => {
+    if (!onlyId || !rowRef.current) return
+    rowRef.current.open = true
+    clipRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [onlyId])
+
   return (
-    <details className={'layer' + (grabbed ? ' is-grabbed' : '')} open={index === 0}>
+    <details ref={rowRef} className={'layer' + (grabbed ? ' is-grabbed' : '')} open={index === 0}>
       <summary className="layer__head">
         <button
           className={'layer__eye' + ((visual ? track.visible : !track.muted) ? '' : ' is-off')}
@@ -373,6 +383,46 @@ function TrackRow({
       </summary>
 
       <div className="layer__body">
+        {only && (
+          <div ref={clipRef} className="layer__clip">
+            <ClipNameField
+              key={`${only.id}:${only.name ?? ''}`}
+              clip={only}
+              placeholder={track.name}
+              onChange={(name) => onClipPatch(track.id, only.id, { name })}
+            />
+            {!simple && (
+              <Fold id="clip" title="選んだクリップの尺" meta="開始・長さ" defaultOpen={false}>
+                <div className="row">
+                  <NumberField
+                    label="開始"
+                    value={Number(only.start.toFixed(3))}
+                    step={0.1}
+                    min={0}
+                    suffix="s"
+                    onChange={(v) => onClipPatch(track.id, only.id, { start: Math.max(0, v) })}
+                  />
+                  <NumberField
+                    label="長さ"
+                    value={Number(clipLenSec(track, only).toFixed(3))}
+                    step={0.1}
+                    min={0.02}
+                    suffix="s"
+                    onChange={(v) =>
+                      onClipPatch(track.id, only.id, {
+                        len: Math.max(
+                          minUnits(track),
+                          Math.min(v * unitsPerSecond(track), Math.max(sourceUnits(track) - only.in, only.len)),
+                        ),
+                      })
+                    }
+                  />
+                </div>
+              </Fold>
+            )}
+          </div>
+        )}
+
         {cell && <FpsRow track={track} onPatch={onPatch} simple={simple} />}
 
         {picture && (
@@ -430,43 +480,6 @@ function TrackRow({
           />
         )}
 
-        {only && (
-          <Fold id="clip" title="選んだクリップ" meta={simple ? '名前' : '名前・尺の微調整'}>
-            <ClipNameField
-              key={`${only.id}:${only.name ?? ''}`}
-              clip={only}
-              placeholder={track.name}
-              onChange={(name) => onClipPatch(track.id, only.id, { name })}
-            />
-            {!simple && (
-              <div className="row">
-                <NumberField
-                  label="開始"
-                  value={Number(only.start.toFixed(3))}
-                  step={0.1}
-                  min={0}
-                  suffix="s"
-                  onChange={(v) => onClipPatch(track.id, only.id, { start: Math.max(0, v) })}
-                />
-                <NumberField
-                  label="長さ"
-                  value={Number(clipLenSec(track, only).toFixed(3))}
-                  step={0.1}
-                  min={0.02}
-                  suffix="s"
-                  onChange={(v) =>
-                    onClipPatch(track.id, only.id, {
-                      len: Math.max(
-                        minUnits(track),
-                        Math.min(v * unitsPerSecond(track), Math.max(sourceUnits(track) - only.in, only.len)),
-                      ),
-                    })
-                  }
-                />
-              </div>
-            )}
-          </Fold>
-        )}
 
         <div className="row layer__actions">
           <button disabled={index === 0} onClick={() => onMove(-1)}>
