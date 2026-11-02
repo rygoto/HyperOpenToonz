@@ -57,6 +57,7 @@ import {
   clipEndSec,
   clipLenSec,
   clipsInRange,
+  detachAudio,
   outputTracks,
   makeClip,
   offsetClipsTo,
@@ -1212,4 +1213,52 @@ test('後ろにつなげて開く: 今のクリップの最後尾からずらし
   assert.equal(tracks[4].clips[0].start, 6.5)
   // 元のトラックには手を付けない
   assert.equal(added[0].clips[0].start, 0)
+})
+
+test('音声の分離: クリップを全部選べば、そのレイヤーを消音して同じ並びの音声トラックを足す', () => {
+  const v = bgTrack({ id: 'v', kind: 'video', duration: 10, clips: [{ id: 'a', start: 1, in: 2, len: 3 }] })
+  const s = audioTrack({ id: 's' })
+  const out = detachAudio([v, s], ['a'], {
+    audioFor: (t, clips) => audioTrack({ id: 'x', clips }),
+    layerFor: () => assert.fail('レイヤーは増やさない'),
+  })
+  assert.deepEqual(out.map((t) => t.id), ['v', 's', 'x'])
+  assert.equal(out[0].muted, true)
+  assert.equal(out[0].clips[0].id, 'a')
+  const c = out[2].clips[0]
+  assert.notEqual(c.id, 'a')
+  assert.deepEqual([c.start, c.in, c.len], [1, 2, 3])
+  assert.equal(v.muted, false) // 元には手を付けない
+})
+
+test('音声の分離: 一部だけなら、選んだ分を消音した新しいレイヤーへ移してすぐ手前に置く', () => {
+  const v = bgTrack({
+    id: 'v',
+    kind: 'video',
+    duration: 10,
+    clips: [
+      { id: 'a', start: 0, in: 0, len: 2 },
+      { id: 'b', start: 2, in: 2, len: 2 },
+    ],
+  })
+  const out = detachAudio([v], ['b'], {
+    audioFor: (t, clips) => audioTrack({ id: 'x', clips }),
+    layerFor: (t) => ({ ...t, id: 'v2' }),
+  })
+  assert.deepEqual(out.map((t) => t.id), ['v', 'v2', 'x'])
+  assert.deepEqual(out[0].clips.map((c) => c.id), ['a'])
+  assert.ok(!out[0].muted)
+  assert.deepEqual(out[1].clips.map((c) => c.id), ['b'])
+  assert.equal(out[1].muted, true)
+  assert.equal(out[2].clips[0].start, 2)
+})
+
+test('音声の分離: 静止画・消音済み・音の無い動画は分けない', () => {
+  const tracks = [
+    bgTrack({ id: 'i', clips: [{ id: 'a', start: 0, in: 0, len: 2 }] }),
+    bgTrack({ id: 'm', kind: 'video', duration: 5, muted: true, clips: [{ id: 'b', start: 0, in: 0, len: 2 }] }),
+    bgTrack({ id: 'n', kind: 'video', duration: 5, clips: [{ id: 'c', start: 0, in: 0, len: 2 }] }),
+  ]
+  const out = detachAudio(tracks, ['a', 'b', 'c'], { audioFor: () => null, layerFor: () => null })
+  assert.equal(out, null)
 })

@@ -98,7 +98,7 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
         className="clip__trim clip__trim--l"
         onPointerDown={(e) => onGrab(e, track, clip, 'trim-start')}
       />
-      {(track.type === 'audio' || track.peaks) && width > 8 && <Wave track={track} clip={clip} width={width} />}
+      {(track.type === 'audio' || (track.peaks && !track.muted)) && width > 8 && <Wave track={track} clip={clip} width={width} />}
       {voidPx >= 1 && <div className="clip__void" style={{ width: voidPx }} title="素材が終わっているので何も映りません" />}
       <span className="clip__label">
         {isCellTrack

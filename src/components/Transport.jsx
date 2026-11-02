@@ -27,6 +27,8 @@ export default function Transport({
   onDuplicate,
   canReplace,
   onReplace,
+  canDetach,
+  onDetach,
   canAnimate,
   onAnimate,
   onUndo,
@@ -91,6 +93,14 @@ export default function Transport({
           onClick={() => replaceInput.current.click()}
         >
           差し替え
+        </button>
+        <button
+          type="button"
+          title="選んだ動画クリップの音声を、別の音声トラックに分ける(動画のほうは消音されます)"
+          disabled={!canDetach}
+          onClick={onDetach}
+        >
+          音声を分離
         </button>
         {onAnimate && (
           <button

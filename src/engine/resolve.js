@@ -235,7 +235,7 @@ export function buildFcpxml(doc, listed, { root } = {}) {
       let k = ends.findIndex((e) => e <= it.startF)
       if (k < 0) k = ends.push(0) - 1
       ends[k] = it.startF + it.lenF
-      put(-(audioLane + k + 1), it.t, it.a, it.startF, it.inF, it.lenF, 'asset-clip', {}, volumeParam(it.t.gain * master))
+      put(-(audioLane + k + 1), it.t, it.a, it.startF, it.inF, it.lenF, 'asset-clip', { srcEnable: 'audio' }, volumeParam(it.t.gain * master))
     }
     audioLane += ends.length
   }

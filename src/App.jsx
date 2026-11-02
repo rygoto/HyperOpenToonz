@@ -4,9 +4,11 @@ import { createAudioEngine, decodeAudioFile, decodeVideoAudio } from './engine/a
 import { MODE_IDS, MODES, ROLE_LABEL, SPEAKERS, normalizeSpeakerList, usedSpeakers } from './modes.js'
 import { nextId } from './engine/ids.js'
 import {
+  canDetachAudio,
   clipContains,
   clipEndSec,
   clipsInRange,
+  detachAudio,
   makeClip,
   outputTracks,
   projectDurationSec,
@@ -910,6 +912,77 @@ export default function App({
     },
     [commit, say, sound],
   )
+
+  /**
+   * 選んだ動画クリップの音声を、別の音声トラックに切り離す。
+   * 音声付加側は読み込んだときに取り出してある音を使い回し、アニメーション側はここで取り出す。
+   */
+  const detachSelectionAudio = useCallback(async () => {
+    const sel = selectionRef.current
+    const targets = tracksRef.current.filter((t) => canDetachAudio(t) && t.clips.some((c) => sel.includes(c.id)))
+    if (targets.length === 0) {
+      say('音声を分ける動画のクリップを選んでください(音を消してある動画は分けられません)', 'error')
+      return
+    }
+    const sounds = new Map()
+    const layers = new Map()
+    setBusy({ label: '音声を取り出し中…' })
+    try {
+      for (const t of targets) {
+        const file = t.sources?.[0]
+        const decoded = t.buffer ? { buffer: t.buffer, peaks: t.peaks } : file ? await decodeVideoAudio(file) : null
+        if (!decoded?.buffer) continue
+        sounds.set(t.id, decoded)
+        // 一部のクリップだけ分けるときは、そのクリップを別のレイヤーへ移す。動画の要素はレイヤーごとに要る
+        if (file && !t.clips.every((c) => sel.includes(c.id))) {
+          const src = await loadBackground(file)
+          layers.set(t.id, { ...t, id: nextId('track'), el: src.el, url: src.url })
+        }
+      }
+    } catch (e) {
+      say(e?.message || '音声を取り出せませんでした', 'error')
+      return
+    } finally {
+      setBusy(null)
+    }
+    if (sounds.size === 0) {
+      say('選んだ動画には音声が入っていません', 'error')
+      return
+    }
+    let count = 0
+    commit((prev) => {
+      count = 0
+      const next = detachAudio(prev, sel, {
+        audioFor: (t, clips) => {
+          const s = sounds.get(t.id)
+          if (!s) return null
+          count += clips.length
+          return {
+            id: nextId('track'),
+            type: 'audio',
+            name: `${t.name.replace(/\.[^.]+$/, '')} の音声`,
+            fileName: t.fileName,
+            path: t.path,
+            sources: t.sources,
+            buffer: s.buffer,
+            peaks: s.peaks,
+            duration: s.buffer.duration,
+            gain: t.gain ?? 1,
+            muted: false,
+            clips,
+          }
+        },
+        layerFor: (t) => layers.get(t.id) ?? null,
+      })
+      return next ?? prev
+    })
+    say(
+      count > 0
+        ? `${count}個のクリップの音声を音声トラックに分けました(動画のほうは消音しました)`
+        : '音声を分けられるクリップがありませんでした',
+      count > 0 ? 'info' : 'error',
+    )
+  }, [commit, say])
 
   // ---------- 音声付加 ⇄ アニメーション ----------
   /**
@@ -2044,6 +2117,8 @@ export default function App({
             onDuplicate={duplicateSelection}
             canReplace={tracks.some((t) => t.type === 'bg' && t.clips.some((c) => selection.includes(c.id)))}
             onReplace={(file) => replaceSelection(file)}
+            canDetach={tracks.some((t) => canDetachAudio(t) && t.clips.some((c) => selection.includes(c.id)))}
+            onDetach={detachSelectionAudio}
             canAnimate={
               tracks.reduce((n, t) => n + (t.type === 'bg' ? t.clips.filter((c) => selection.includes(c.id)).length : 0), 0) === 1
             }

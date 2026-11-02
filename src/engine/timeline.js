@@ -217,6 +217,42 @@ export function replaceClipSource(tracks, clipIds, make) {
   return changed ? out : tracks
 }
 
+/** 音を分けられる動画のレイヤーか(音をまだ自分で鳴らしているもの) */
+export const canDetachAudio = (t) => isBg(t) && t.kind === 'video' && !t.muted
+
+/**
+ * 選んだ動画クリップの音声を、別の音声トラックへ切り離す。
+ *   audioFor(track, clips) … そのレイヤーの音を鳴らす音声トラックをつくる(clips はそのまま載せる)。null なら分けない
+ *   layerFor(track)        … 選ばれなかったクリップが残るとき、選んだ分を載せる同じ素材のレイヤーをつくる
+ * レイヤーのクリップを全部選んだときは、そのレイヤーを消音するだけ。
+ * 一部だけのときは、選んだ分を消音した新しいレイヤーへ移してすぐ手前に置く(音はレイヤー単位でしか消せないため)。
+ * 音声トラックは位置も素材の頭も長さも動画と同じで、並びの最後に足す。分けるものが無ければ null。
+ */
+export function detachAudio(tracks, clipIds, { audioFor, layerFor }) {
+  const out = []
+  const audios = []
+  for (const t of tracks) {
+    const picked = canDetachAudio(t) ? t.clips.filter((c) => clipIds.includes(c.id)) : []
+    const audio = picked.length > 0 ? audioFor(t, picked.map((c) => ({ ...c, id: nextId('clip') }))) : null
+    if (!audio) {
+      out.push(t)
+      continue
+    }
+    if (picked.length === t.clips.length) {
+      out.push({ ...t, muted: true })
+    } else {
+      const layer = layerFor(t)
+      if (!layer) {
+        out.push(t)
+        continue
+      }
+      out.push({ ...t, clips: t.clips.filter((c) => !picked.includes(c)) }, { ...layer, muted: true, clips: picked })
+    }
+    audios.push(audio)
+  }
+  return audios.length > 0 ? [...out, ...audios] : null
+}
+
 /** クリップを複製して end まで並べる */
 export function repeatToFill(track, endSec) {
   if (track.clips.length === 0) return track
