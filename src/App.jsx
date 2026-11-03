@@ -9,6 +9,7 @@ import {
   clipEndSec,
   clipsInRange,
   detachAudio,
+  isVisual,
   makeClip,
   outputTracks,
   projectDurationSec,
@@ -1251,7 +1252,14 @@ export default function App({
         }
         // 中身がそっくり入れ替わるので、焼き溜めた撮影処理はここで手放す
         clearFxCache()
-        commit(out.tracks)
+        // クリップの中身を作っている途中なら、今の参考用の動画・音声は残す(開いたシーン側の古い参考は捨てる)
+        if (job) {
+          const refs = tracksRef.current.filter((t) => t.reference)
+          const own = out.tracks.filter((t) => !t.reference)
+          commit([...refs.filter(isVisual), ...own, ...refs.filter((t) => !isVisual(t))])
+        } else {
+          commit(out.tracks)
+        }
         setSelection([])
         setStage(out.stage)
         setProjectFps(out.projectFps)
