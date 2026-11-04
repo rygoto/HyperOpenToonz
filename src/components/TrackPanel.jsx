@@ -154,6 +154,48 @@ function PlaceBody({ track, onPatch }) {
   )
 }
 
+/** 別のレイヤーへ写す、配置と撮影処理の項目(fps・表示/非表示・素材は写さない) */
+const LOOK_KEYS = ['fit', 'opacity', 'scale', 'rotate', 'flipX', 'x', 'y', 'blend']
+
+function lookOf(track) {
+  const look = {}
+  for (const k of LOOK_KEYS) if (track[k] !== undefined) look[k] = track[k]
+  look.fx = structuredClone(track.fx ?? null)
+  return look
+}
+
+/**
+ * 配置・撮影処理のコピーと貼り付け。
+ * コピーしたものはパネルが覚えておき、他のレイヤーを開くと貼り付けられる。
+ */
+function LookCopy({ track, copied, otherCells, onCopy, onPaste, onPasteAllCells }) {
+  const mine = copied?.from === track.id
+  return (
+    <div className="look-copy">
+      <div className="row">
+        <button
+          className={mine ? 'is-active' : ''}
+          title="拡大率・位置・回転・反転・配置・合成・不透明度と、撮影処理をコピーします"
+          onClick={onCopy}
+        >
+          {mine ? '✓ コピー済み' : '📋 配置・撮影処理をコピー'}
+        </button>
+        {copied && !mine && (
+          <button className="primary" title={`「${copied.name}」の配置と撮影処理をこのレイヤーへ写します`} onClick={onPaste}>
+            📥 貼り付け
+          </button>
+        )}
+      </div>
+      {copied && mine && otherCells > 0 && (
+        <button className="wide" onClick={onPasteAllCells}>
+          ほかの連番 {otherCells} 本すべてへ貼り付け
+        </button>
+      )}
+      {copied && !mine && <p className="hint">コピー元: {copied.name}</p>}
+    </div>
+  )
+}
+
 function FpsRow({ track, onPatch, simple }) {
   return (
     <div className={simple ? '' : 'row'}>
@@ -342,6 +384,11 @@ function TrackRow({
   onRepeatFill,
   grabbed,
   onGrab,
+  copied,
+  otherCells,
+  onCopyLook,
+  onPasteLook,
+  onPasteLookAllCells,
 }) {
   const selected = track.clips.filter((c) => selection.includes(c.id))
   const only = selected.length === 1 ? selected[0] : null
@@ -435,6 +482,17 @@ function TrackRow({
           />
         )}
 
+        {picture && (
+          <LookCopy
+            track={track}
+            copied={copied}
+            otherCells={otherCells}
+            onCopy={onCopyLook}
+            onPaste={onPasteLook}
+            onPasteAllCells={onPasteLookAllCells}
+          />
+        )}
+
         {picture && !simple && (
           <Fold id="place" title="配置・合成" defaultOpen={false}>
             <PlaceBody track={track} onPatch={onPatch} />
@@ -509,6 +567,7 @@ export default function TrackPanel({
   onPatchLive,
   onBeginEdit,
   onClipPatch,
+  onPasteLook,
   onRemove,
   onMove,
   onRepeatFill,
@@ -522,6 +581,9 @@ export default function TrackPanel({
   const audioInput = useRef(null)
   // 音声付加側では、同じファイル選択を BGM と SE で使い分ける
   const role = useRef(null)
+  // コピーした配置・撮影処理 { from: トラックid, name, look }
+  const [copied, setCopied] = useState(null)
+  const cellIds = tracks.filter((t) => t.type === 'cell').map((t) => t.id)
 
   const pickAudio = (r) => {
     role.current = r
@@ -617,6 +679,13 @@ export default function TrackPanel({
               onRepeatFill={() => onRepeatFill(t.id)}
               grabbed={grabTrackId === t.id}
               onGrab={() => onGrab(t.id)}
+              copied={copied}
+              otherCells={cellIds.filter((id) => id !== t.id).length}
+              onCopyLook={() => setCopied({ from: t.id, name: t.name, look: lookOf(t) })}
+              onPasteLook={() => copied && onPasteLook([t.id], copied.look)}
+              onPasteLookAllCells={() =>
+                copied && onPasteLook(cellIds.filter((id) => id !== copied.from), copied.look)
+              }
             />
           ))}
         </div>

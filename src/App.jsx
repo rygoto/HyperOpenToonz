@@ -666,6 +666,15 @@ export default function App({
     [applyTracks],
   )
 
+  /** 配置・撮影処理(look)を複数のレイヤーへまとめて貼る。取り消しは1回で戻る */
+  const pasteLook = useCallback(
+    (ids, look) =>
+      commit((prev) =>
+        prev.map((t) => (ids.includes(t.id) && isVisual(t) ? { ...t, ...look, fx: structuredClone(look.fx) } : t)),
+      ),
+    [commit],
+  )
+
   const patchClip = useCallback(
     (trackId, clipId, patch) =>
       commit((prev) =>
@@ -2047,6 +2056,7 @@ export default function App({
             onPatchLive={patchTrackLive}
             onBeginEdit={pushHistory}
             onClipPatch={patchClip}
+            onPasteLook={pasteLook}
             onRemove={removeTrack}
             onMove={moveTrack}
             onRepeatFill={repeatFill}
