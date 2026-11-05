@@ -79,8 +79,14 @@ function ClipEffects({ track, clip, lenSec, pxPerSec, ol }) {
   const olSec = ol ? ol.to - ol.from : 0
   const olPx = olSec * pxPerSec
   const olLeft = ol ? (ol.from - clip.start) * pxPerSec : 0
+  const muffled = canFade(track) && clip.muffle > 0
   return (
     <>
+      {muffled && (
+        <span className="clip__badge" title={`部屋の外(こもり具合 ${Math.round(clip.muffle * 100)}% / 響き ${Math.round((clip.room ?? 0) * 100)}%)`}>
+          壁
+        </span>
+      )}
       {fadeIn > 0 && (
         <svg className="clip__fade clip__fade--in" style={{ width: fadeIn * pxPerSec }} viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
           <title>フェードイン {fadeIn.toFixed(2)}秒</title>

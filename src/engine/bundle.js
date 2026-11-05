@@ -221,6 +221,67 @@ function entryName(path, used) {
 }
 
 /**
+ * 同じパス(ファイル名)なのに中身が別のファイル、を持つトラックがあれば、後から出てきたほうのパスを
+ * 「名前 (2).mp4」のようにずらしたトラックの並びを返す(元の並びは書き換えない)。
+ * 保存では素材をパスで1つに畳むので、ずらさないと後のほうの実物が保存されず、開き直すと前のほうの素材に化ける
+ * (アニメーション側で作った動画を、同じ名前のまま音声付加へ戻したときなど)。
+ * 同じ実物を指しているだけのもの(同じ素材のクリップを分けたレイヤー)はそのまま
+ */
+export function separateSourcePaths(tracks) {
+  const owner = new Map() // パスの鍵 → そのパスの実物
+  const taken = new Set()
+  for (const t of tracks) {
+    const names = t.type === 'cell' ? t.files ?? [] : [t.fileName ?? t.name]
+    const paths = t.type === 'cell' ? t.paths ?? [] : [t.path]
+    names.forEach((name, i) => taken.add(pathKey(paths[i] || name)))
+  }
+  const freePath = (path) => {
+    const slash = path.lastIndexOf('/')
+    const dir = slash >= 0 ? path.slice(0, slash + 1) : ''
+    const base = path.slice(slash + 1)
+    const dot = base.lastIndexOf('.')
+    const stem = dot > 0 ? base.slice(0, dot) : base
+    const ext = dot > 0 ? base.slice(dot) : ''
+    for (let i = 2; ; i++) {
+      const next = `${dir}${stem} (${i})${ext}`
+      if (!taken.has(pathKey(next))) {
+        taken.add(pathKey(next))
+        return next
+      }
+    }
+  }
+
+  let changed = false
+  const out = tracks.map((t) => {
+    const sources = Array.isArray(t.sources) ? t.sources : []
+    const cell = t.type === 'cell'
+    const names = cell ? t.files ?? [] : [t.fileName ?? t.name]
+    const paths = cell ? [...(t.paths ?? [])] : [t.path]
+    let moved = false
+    names.forEach((name, i) => {
+      const file = sources[i]
+      if (!file) return
+      const path = paths[i] || name
+      const key = pathKey(path)
+      const prev = owner.get(key)
+      if (!prev) {
+        owner.set(key, file)
+        return
+      }
+      if (prev === file) return
+      const next = freePath(String(path).replace(/\\/g, '/'))
+      owner.set(pathKey(next), file)
+      paths[i] = next
+      moved = true
+    })
+    if (!moved) return t
+    changed = true
+    return cell ? { ...t, paths } : { ...t, path: paths[0] }
+  })
+  return changed ? out : tracks
+}
+
+/**
  * トラックが持っている素材の実物を、シーン JSON の files / paths と同じ順で並べる。
  * { path, name, file } の配列(同じパスのものは1つに畳む)。
  * 実物が無いレイヤーがあれば、その名前を missing に入れて返す。

@@ -880,6 +880,21 @@ input[type="color"] {
   pointer-events: none;
 }
 
+/* 音声のエフェクトの印(「部屋の外」) */
+.clip__badge {
+  position: absolute;
+  top: 1px;
+  right: 6px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  pointer-events: none;
+}
+
 /* 前のクリップ側は尻に向かって消えていく帯 */
 .clip__ol--out {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.55));
@@ -1880,6 +1895,24 @@ input[type="color"] {
   margin: 4px 0 0;
   font-size: 10px;
   color: var(--dim);
+}
+
+/* 音声の「部屋の外」 */
+.muffle {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.muffle__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.muffle input[type='range'] {
+  width: 100%;
 }
 
 /* オーバーラップの替わり方 */

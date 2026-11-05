@@ -61,6 +61,7 @@ import {
   BUNDLE_MIME,
   isBundleFile,
   packBundle,
+  separateSourcePaths,
   trackSources,
   unpackBundle,
   writeZip,
@@ -70,6 +71,7 @@ import {
   directoryOfFile,
   discardSaveTarget,
   fileStamp,
+  jobReturnName,
   forgetExportDirectory,
   loadExportDirectory,
   openSequenceFolder,
@@ -1073,6 +1075,7 @@ export default function App({
       fadeCount: audible.length,
       fadeIn: first(audible, 'fadeIn'),
       fadeOut: first(audible, 'fadeOut'),
+      muffled: audible.filter((c) => c.muffle > 0).length,
     }
   }, [tracks, selection])
 
@@ -1800,7 +1803,7 @@ export default function App({
       const ext = (blob.type || '').includes('webm') ? 'webm' : 'mp4'
       setExportResult({
         blob,
-        filename: withExtension(exportName || `${cfg.filePrefix}-${fileStamp()}`, ext),
+        filename: withExtension(giveBack ? jobReturnName(exportName || cfg.filePrefix) : exportName || `${cfg.filePrefix}-${fileStamp()}`, ext),
         back: giveBack ? job : null,
       })
       say('書き出しが完了しました。保存してください')
@@ -1916,11 +1919,13 @@ export default function App({
    *   note(name) … 保存したあとの知らせに添える言葉
    */
   const saveWithAssets = useCallback(
-    async ({ list, ext, suffix = '', description, pack, note }) => {
-      if (list.length === 0) {
+    async ({ list: given, ext, suffix = '', description, pack, note }) => {
+      if (given.length === 0) {
         say('保存するレイヤーがありません', 'error')
         return
       }
+      // 同じ名前で中身の違う素材は、保存の中ではパスをずらして別々に入れる(畳まれて片方が消えないように)
+      const list = separateSourcePaths(given)
       const { assets, missing } = trackSources(list)
       if (missing.length > 0) {
         say(`素材の実物が無いレイヤーがあるのでまとめられません: ${missing.join('、')}`, 'error')

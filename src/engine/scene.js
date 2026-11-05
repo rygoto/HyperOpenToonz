@@ -48,8 +48,8 @@ const str = (v, fallback = '') => (typeof v === 'string' && v ? v : fallback)
 
 /* ---------------- 書き出し ---------------- */
 
-/** クリップに掛けたエフェクト(olMid 以外は秒)。掛けていないものは書かない */
-const EFFECT_KEYS = ['dissolve', 'olMid', 'fadeIn', 'fadeOut']
+/** クリップに掛けたエフェクト(dissolve / fadeIn / fadeOut は秒、olMid / muffle / room は 0〜1)。掛けていないものは書かない */
+const EFFECT_KEYS = ['dissolve', 'olMid', 'fadeIn', 'fadeOut', 'muffle', 'room']
 const effectsOf = (c, round = (v) => v) => {
   const out = {}
   for (const k of EFFECT_KEYS) {

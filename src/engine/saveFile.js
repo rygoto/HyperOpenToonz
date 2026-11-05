@@ -419,6 +419,16 @@ export async function discardSaveTarget(target) {
   }
 }
 
+/**
+ * アニメーション側から音声付加へ戻す動画の名前(拡張子なし)。後ろに作った時刻を付ける。
+ * 同じクリップを何度も作り直したり、同じ動画の別のクリップを作ったりしても名前が重ならないように
+ * (同じ名前だと、どれがどの中身か取り違えやすい)。すでに時刻が付いていれば付け替える(重ねない)
+ */
+export function jobReturnName(base, date = new Date()) {
+  const stem = String(base ?? '').replace(/-\d{8}-\d{6}$/, '') || 'anime'
+  return `${stem}-${fileStamp(date)}`
+}
+
 export function fileStamp(date = new Date()) {
   const p = (n) => String(n).padStart(2, '0')
   return (

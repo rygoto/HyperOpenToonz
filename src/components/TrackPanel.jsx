@@ -95,6 +95,55 @@ function OlCurveField({ clip, onPatch }) {
 }
 
 /**
+ * 0〜1 のつまみ(% で見せる)。ドラッグ中は手元の値だけ動かし、離したときに1回だけ onCommit する
+ */
+function DraftRange({ label, value, min = 0, max = 1, onCommit }) {
+  const [draft, setDraft] = useState(null)
+  const v = draft ?? value
+  const apply = () => {
+    if (draft == null) return
+    const next = Math.round(draft * 100) / 100
+    setDraft(null)
+    if (Math.abs(next - value) > 1e-9) onCommit(next)
+  }
+  return (
+    <label className="field wide">
+      <span>
+        {label} {Math.round(v * 100)}%
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={0.01}
+        value={v}
+        onChange={(e) => setDraft(Number(e.target.value))}
+        onPointerUp={apply}
+        onKeyUp={apply}
+        onBlur={apply}
+      />
+    </label>
+  )
+}
+
+/** 音声の「部屋の外」の調整(掛かっているクリップだけ) */
+function MuffleFields({ clip, onPatch }) {
+  return (
+    <div className="muffle">
+      <div className="muffle__head">
+        <span>部屋の外</span>
+        <button type="button" title="「部屋の外」を外す" onClick={() => onPatch({ muffle: undefined, room: undefined })}>
+          外す
+        </button>
+      </div>
+      <DraftRange label="こもり具合" value={clip.muffle} min={0.05} onCommit={(muffle) => onPatch({ muffle })} />
+      <DraftRange label="響き" value={clip.room ?? 0} onCommit={(room) => onPatch({ room: room > 0 ? room : undefined })} />
+      <p className="layer__effects-hint">こもり具合を上げるほど分厚い壁の向こうに、響きを上げるほど広い部屋の中から聞こえます</p>
+    </div>
+  )
+}
+
+/**
  * 選んだクリップに掛けたエフェクトの調整。
  *   音のフェード … フェードを掛けられるクリップならいつも出す(0 で外す)
  *   オーバーラップ … 掛かっているクリップ(前後のうち後ろ)だけ。掛けるのは再生バーの「エフェクト」から。
@@ -150,6 +199,10 @@ function ClipEffectsFields({ track, clip, olPairs, onPatch }) {
         </div>
       )}
       {fade && <p className="layer__effects-hint">0 でフェードなし</p>}
+      {fade && clip.muffle > 0 && <MuffleFields key={clip.id} clip={clip} onPatch={onPatch} />}
+      {fade && !(clip.muffle > 0) && (
+        <p className="layer__effects-hint">「部屋の外」(こもった声)は再生バーの「エフェクト ▾」から掛けられます</p>
+      )}
     </div>
   )
 }

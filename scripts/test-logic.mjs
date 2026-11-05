@@ -17,7 +17,7 @@ import {
   normalizeFx,
   renderFx,
 } from '../src/engine/fx.js'
-import { sanitizeFilename, withExtension } from '../src/engine/saveFile.js'
+import { jobReturnName, sanitizeFilename, withExtension } from '../src/engine/saveFile.js'
 import {
   assetKey,
   foundCount,
@@ -32,6 +32,7 @@ import {
   serializeScene,
 } from '../src/engine/scene.js'
 import { createClock } from '../src/engine/clock.js'
+import { insertMuffle, muffleParams } from '../src/engine/muffle.js'
 import {
   EMPTY,
   applySheet,
@@ -893,6 +894,46 @@ test('素材ごと保存: .piyo にまとめて開き直すと、シーンと素
   assert.deepEqual(trackSources([bgTrack({ name: 'x', fileName: 'x.png' })]).missing, ['x'])
 })
 
+test('素材ごと保存: 同じ名前で中身の違う動画(アニメーション側から戻したもの)も、開き直すと取り違えない', async () => {
+  const { packBundle, separateSourcePaths, trackSources, unpackBundle } = await import('../src/engine/bundle.js')
+  const { serializeScene } = await import('../src/engine/scene.js')
+  const bytes = (n, seed) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 0xff)
+  // 前に戻した cut-anime.mp4 が残っているところへ、同じ名前の新しい cut-anime.mp4 を戻した
+  const old = new File([bytes(900, 1)], 'cut-anime.mp4')
+  const fresh = new File([bytes(1200, 2)], 'cut-anime.mp4')
+  const tracks = [
+    bgTrack({ id: 't1', kind: 'video', name: 'cut-anime', fileName: 'cut-anime.mp4', path: 'cut-anime.mp4', sources: [old], fx: undefined, clips: [{ id: 'a', start: 0, in: 0, len: 1 }] }),
+    bgTrack({ id: 't2', kind: 'video', name: 'cut-anime', fileName: 'cut-anime.mp4', path: 'cut-anime.mp4', sources: [fresh], fx: undefined, clips: [{ id: 'b', start: 1, in: 0, len: 1 }] }),
+    // 同じ実物を分けただけのレイヤーはずらさない
+    bgTrack({ id: 't3', kind: 'video', name: 'cut-anime', fileName: 'cut-anime.mp4', path: 'cut-anime.mp4', sources: [old], fx: undefined, clips: [{ id: 'c', start: 2, in: 0, len: 1 }] }),
+  ]
+  // ずらさないと、後のほうの実物は保存に入らない(これが不具合の元)
+  assert.equal(trackSources(tracks).assets.length, 1)
+
+  const list = separateSourcePaths(tracks)
+  assert.deepEqual(list.map((t) => t.path), ['cut-anime.mp4', 'cut-anime (2).mp4', 'cut-anime.mp4'])
+  assert.equal(tracks[1].path, 'cut-anime.mp4') // 元の並びは書き換えない
+  const { assets } = trackSources(list)
+  assert.equal(assets.length, 2)
+
+  const doc = serializeScene({ tracks: list, stage: {}, projectFps: 24, exportFps: 24, muted: false, volume: 1, name: 'n', folders: [], mode: 'sound' })
+  const { text, files } = await unpackBundle(new File([await packBundle(doc, assets)], 'x.piyo'))
+  const scene = parseScene(text)
+  const pool = makePool(files)
+  assert.equal(poolCoversScene(scene, pool), true)
+  const picked = scene.tracks.map((t) => poolFind(pool, t.files[0], t.paths?.[0]))
+  assert.equal(picked[1].size, fresh.size)
+  assert.equal(picked[0].size, old.size)
+})
+
+test('音声付加へ戻す動画の名前: 時刻が付き、付け直しても重ならない', () => {
+  const at = new Date(2026, 10, 6, 9, 5, 7)
+  assert.equal(jobReturnName('cut-anime', at), 'cut-anime-20261106-090507')
+  const later = new Date(2026, 10, 6, 14, 0, 0)
+  assert.equal(jobReturnName('cut-anime-20261106-090507', later), 'cut-anime-20261106-140000')
+  assert.equal(jobReturnName('', at), 'anime-20261106-090507')
+})
+
 test('覚えていた保存先フォルダが消えていたら、ダイアログ / ダウンロードに落として知らせる', async () => {
   const { pickSaveTarget } = await import('../src/engine/saveFile.js')
   const gone = {
@@ -1418,6 +1459,35 @@ test('オーバーラップ: 離れた2つには掛けない。接している�
   assert.deepEqual(dissolvePairs(lone), [])
   const butt = [vidTrack({ id: 'x', clips: [{ id: 'b', start: 2, in: 0, len: 2, dissolve: 1 }] }), vidTrack({ id: 'y', clips: [{ id: 'a', start: 0, in: 0, len: 2 }] })]
   assert.deepEqual(dissolvePairs(butt), [])
+})
+
+test('部屋の外: こもり具合を上げるほど低いところから削り、小さくなる', () => {
+  const light = muffleParams({ muffle: 0.2, room: 0 })
+  const heavy = muffleParams({ muffle: 0.9, room: 0 })
+  assert.ok(heavy.cutoff < light.cutoff)
+  assert.ok(heavy.cutoff > 200 && light.cutoff < 3200)
+  assert.ok(heavy.dry < light.dry)
+  assert.equal(light.wet, 0)
+  assert.ok(muffleParams({ muffle: 0.6, room: 0.5 }).wet > 0)
+})
+
+test('部屋の外: 響きが 0 なら残響をつながない。分割しても両方に残る', () => {
+  const made = []
+  const node = (kind) => {
+    const n = { kind, frequency: { value: 0 }, Q: { value: 0 }, gain: { value: 0 }, to: [], connect: (x) => n.to.push(x) }
+    made.push(n)
+    return n
+  }
+  const ctx = { sampleRate: 8000, createBiquadFilter: () => node('biquad'), createGain: () => node('gain'), createConvolver: () => node('conv'), createBuffer: (c, l) => ({ getChannelData: () => new Float32Array(l) }) }
+  const input = node('in')
+  insertMuffle(ctx, input, { muffle: 0.6 })
+  assert.equal(made.some((n) => n.kind === 'conv'), false)
+  insertMuffle(ctx, input, { muffle: 0.6, room: 0.3 })
+  assert.equal(made.some((n) => n.kind === 'conv'), true)
+
+  const t = audioTrack()
+  const [a, b] = splitClip(t, { id: 'c', start: 0, in: 0, len: 4, muffle: 0.6, room: 0.2, fadeIn: 1 }, 2)
+  assert.deepEqual([a.muffle, a.room, b.muffle, b.room, b.fadeIn], [0.6, 0.2, 0.6, 0.2, undefined])
 })
 
 test('フェード: 頭と尻で音量が 0 から 1、1 から 0 へ', () => {

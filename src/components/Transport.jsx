@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { BACKGROUND_ACCEPT } from '../engine/media.js'
+import { MUFFLE_DEFAULT } from '../engine/muffle.js'
 
 function fmt(t) {
   const sign = t < 0 ? '-' : ''
@@ -32,6 +33,13 @@ const secOf = (v, fallback) => {
   const x = Number(v)
   return Number.isFinite(x) && x > 0 ? Math.min(30, Math.round(x * 100) / 100) : fallback
 }
+
+/** 「部屋の外」の出発点(こもり具合 / 響き。どれも 0〜1) */
+const MUFFLE_PRESETS = [
+  { label: '隣の部屋', title: '少しこもって、部屋の響きが乗る', muffle: 0.45, room: 0.3 },
+  { label: 'ドア越し', title: 'はっきりこもる。いちばん普通の「部屋の外」', ...MUFFLE_DEFAULT },
+  { label: '壁越し(遠い)', title: '分厚い壁の向こう。言葉はほとんど聞き取れない', muffle: 0.85, room: 0.35 },
+]
 
 /**
  * エフェクトのメニュー。選んでいるクリップに掛ける
@@ -140,6 +148,24 @@ function EffectsMenu({ info, onDissolve, onClearDissolve, onFade }) {
                 {info.fadeOut > 0 ? '変更' : '掛ける'}
               </button>
               <button type="button" disabled={!(fades && info.fadeOut > 0)} onClick={() => onFade({ fadeOut: 0 })}>
+                外す
+              </button>
+            </div>
+          </section>
+          <section className="fxmenu__group">
+            <h4>音声: 部屋の外</h4>
+            <p className="fxmenu__hint">
+              {fades
+                ? '壁やドアの向こうから聞こえるような、こもった声にします。細かい具合は左のパネルで'
+                : '音声のクリップを選んでください'}
+            </p>
+            <div className="fxmenu__row">
+              {MUFFLE_PRESETS.map((p) => (
+                <button key={p.label} type="button" className="primary" disabled={!fades} title={p.title} onClick={() => onFade({ muffle: p.muffle, room: p.room })}>
+                  {p.label}
+                </button>
+              ))}
+              <button type="button" disabled={!(fades && info.muffled > 0)} onClick={() => onFade({ muffle: 0, room: 0 })}>
                 外す
               </button>
             </div>

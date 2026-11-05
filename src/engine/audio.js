@@ -1,4 +1,5 @@
 import { scheduleFade } from './timeline.js'
+import { hasMuffle, insertMuffle } from './muffle.js'
 
 let sharedCtx = null
 
@@ -122,6 +123,8 @@ export function createAudioEngine() {
       }
       s.disconnect()
     }
+    // 残響の尻尾が止めたあとも鳴り続けないよう、出口ごと外す
+    for (const list of gains.values()) for (const g of list) g.disconnect()
     sources = []
     gains = new Map()
     playing = false
@@ -172,7 +175,9 @@ export function createAudioEngine() {
         const fade = ctx.createGain()
         scheduleFade(fade.gain, clip, clip.len, skip, (l) => t0 + Math.max(0, (clip.start + l - time) / rate))
         node.connect(fade)
-        fade.connect(gain)
+        // 「部屋の外」はフェードのあとに挟む
+        const fx = hasMuffle(clip) ? insertMuffle(ctx, fade, clip) : null
+        ;(fx ? fx.out : fade).connect(gain)
         gain.connect(master)
         node.start(
           t0 + Math.max(0, (clip.start - time) / rate),
@@ -181,7 +186,15 @@ export function createAudioEngine() {
         )
         node.onended = () => {
           fade.disconnect()
-          gain.disconnect()
+          if (!fx) {
+            gain.disconnect()
+            return
+          }
+          // 残響の尻尾が鳴り終わるまで待ってから外す
+          setTimeout(() => {
+            for (const n of fx.nodes) n.disconnect()
+            gain.disconnect()
+          }, 800)
         }
         sources.push(node)
         const list = gains.get(track.id)
