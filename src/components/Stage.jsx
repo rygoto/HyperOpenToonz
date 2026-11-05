@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { composite, placeRect, trackDeg, trackRectAt } from '../engine/compositor.js'
 import { filesFromDataTransfer } from '../engine/media.js'
-import { activeClip, bgPastEnd, bgSourceTime, isVisual } from '../engine/timeline.js'
+import { bgFrame, dissolvePairs, isVisual } from '../engine/timeline.js'
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -58,18 +58,18 @@ function syncVideo(el, target, playing, rate) {
 }
 
 /** 背景トラック1本ぶんの追従。クリップの外では止めておく */
-function syncBgTrack(track, st, muted, volume) {
+function syncBgTrack(track, st, muted, volume, pairs) {
   const el = track.el
   if (!el) return
   // 音声を取り出してある動画(音声付加側)は Web Audio が鳴らすので、要素は黙らせる
   el.muted = muted || !!track.muted || !!track.buffer
   el.volume = clamp(volume * (track.gain ?? 1), 0, 1)
-  const clip = activeClip(track, st.time)
-  if (!clip || bgPastEnd(track, clip, st.time)) {
+  const frame = bgFrame(track, st.time, pairs)
+  if (!frame) {
     if (!el.paused) el.pause()
     return
   }
-  syncVideo(el, bgSourceTime(track, clip, st.time), st.playing, st.rate)
+  syncVideo(el, frame.time, st.playing, st.rate)
 }
 
 const HANDLES = ['nw', 'ne', 'sw', 'se']
@@ -164,9 +164,10 @@ export default function Stage({
       const st = clock.peek()
       const volume = v.muted ? 0 : v.volume
 
+      const pairs = dissolvePairs(v.tracks)
       for (const track of v.tracks) {
         if (track.type === 'bg' && track.kind === 'video') {
-          syncBgTrack(track, st, v.muted, v.volume)
+          syncBgTrack(track, st, v.muted, v.volume, pairs)
         }
       }
 

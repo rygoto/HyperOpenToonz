@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AUDIO_ACCEPT } from '../engine/media.js'
-import { clipLenSec, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
+import { canDissolve, canFade, clipLenSec, dissolvePairs, dissolveSpanOf, OL_MID_DEFAULT, OL_MID_MAX, OL_MID_MIN, olMidOf, olMix, isVisual, minUnits, sourceUnits, unitsPerSecond } from '../engine/timeline.js'
 import { ROLE_LABEL, roleLabel } from '../modes.js'
 import Fold from './Fold.jsx'
 import FxPanel from './FxPanel.jsx'
@@ -28,6 +28,129 @@ function NumberField({ label, value, onChange, step = 1, min, max, suffix }) {
         {suffix && <em>{suffix}</em>}
       </span>
     </label>
+  )
+}
+
+/** 秒の欄の値。0 以下は「掛けない」(キーごと外す) */
+const effectSec = (v) => (v > 0 ? Math.min(30, Math.round(v * 100) / 100) : undefined)
+
+/**
+ * オーバーラップの推移の具合。重なりの真ん中で、後ろのクリップがどれだけ見えているか(%)。
+ * ドラッグ中は手元の値だけ動かし、離したときに1回だけ記録する(取り消し1回ぶんにする)
+ */
+function OlCurveField({ clip, onPatch }) {
+  const saved = olMidOf(clip)
+  const [draft, setDraft] = useState(null)
+  const mid = draft ?? saved
+  const pct = Math.round(mid * 100)
+  const apply = () => {
+    if (draft == null) return
+    const v = Math.round(draft * 100) / 100
+    setDraft(null)
+    if (Math.abs(v - saved) > 1e-9) onPatch({ olMid: Math.abs(v - OL_MID_DEFAULT) < 1e-9 ? undefined : v })
+  }
+  // 曲線の見本(左下 = 前のクリップだけ、右上 = 後ろのクリップだけ)
+  const pts = Array.from({ length: 21 }, (_, i) => {
+    const k = i / 20
+    return `${(k * 40).toFixed(1)},${(20 - olMix(k, mid) * 20).toFixed(1)}`
+  }).join(' ')
+  const hint = pct > 55 ? '早めに次のクリップへ替わる' : pct < 45 ? '終わり際まで前のクリップが残る' : '一定の速さで替わる'
+  return (
+    <div className="ol-curve">
+      <label className="field wide">
+        <span>
+          替わり方(真ん中で次のクリップが {pct}% 見える)
+        </span>
+        <input
+          type="range"
+          min={OL_MID_MIN}
+          max={OL_MID_MAX}
+          step={0.01}
+          value={mid}
+          onChange={(e) => setDraft(Number(e.target.value))}
+          onPointerUp={apply}
+          onKeyUp={apply}
+          onBlur={apply}
+        />
+      </label>
+      <div className="ol-curve__foot">
+        <svg className="ol-curve__graph" viewBox="0 0 40 20" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points={pts} />
+        </svg>
+        <span className="layer__effects-hint">{hint}</span>
+        <button
+          type="button"
+          disabled={Math.abs(mid - OL_MID_DEFAULT) < 1e-9}
+          title="一定の速さ(50%)に戻す"
+          onClick={() => {
+            setDraft(null)
+            onPatch({ olMid: undefined })
+          }}
+        >
+          戻す
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 選んだクリップに掛けたエフェクトの調整。
+ *   音のフェード … フェードを掛けられるクリップならいつも出す(0 で外す)
+ *   オーバーラップ … 掛かっているクリップ(前後のうち後ろ)だけ。掛けるのは再生バーの「エフェクト」から。
+ *                    長さはタイムライン上のクリップの重なりそのもの
+ */
+function ClipEffectsFields({ track, clip, olPairs, onPatch }) {
+  const fade = canFade(track)
+  const visual = canDissolve(track)
+  const marked = visual && clip.dissolve > 0
+  const span = marked ? dissolveSpanOf(olPairs, clip.id) : null
+  if (!fade && !visual) return null
+  return (
+    <div className="layer__effects">
+      <div className="layer__effects-title">選んだクリップのエフェクト</div>
+      {marked && (
+        <div className="row">
+          <span className="layer__effects-hint">
+            {span
+              ? `オーバーラップ ${(span.to - span.from).toFixed(2)}s(前のクリップとの重なり。長さはタイムラインで重なりを変えて調整)`
+              : 'オーバーラップ: 前のクリップと重なっていないので効いていません(タイムラインで重ねると効きます)'}
+          </span>
+          <button type="button" title="オーバーラップを外す" onClick={() => onPatch({ dissolve: undefined, olMid: undefined })}>
+            外す
+          </button>
+        </div>
+      )}
+      {marked && <OlCurveField key={clip.id} clip={clip} onPatch={onPatch} />}
+      {visual && !marked && (
+        <p className="layer__effects-hint">
+          オーバーラップなし。掛けるには、前後に並んだ2つのクリップを選んで再生バーの「エフェクト ▾」から(クリップが重なっている区間だけに効きます)
+        </p>
+      )}
+      {fade && (
+        <div className="row">
+          <NumberField
+            label="フェードイン"
+            value={clip.fadeIn ?? 0}
+            step={0.1}
+            min={0}
+            max={30}
+            suffix="s"
+            onChange={(v) => onPatch({ fadeIn: effectSec(v) })}
+          />
+          <NumberField
+            label="フェードアウト"
+            value={clip.fadeOut ?? 0}
+            step={0.1}
+            min={0}
+            max={30}
+            suffix="s"
+            onChange={(v) => onPatch({ fadeOut: effectSec(v) })}
+          />
+        </div>
+      )}
+      {fade && <p className="layer__effects-hint">0 でフェードなし</p>}
+    </div>
   )
 }
 
@@ -389,6 +512,7 @@ function TrackRow({
   onCopyLook,
   onPasteLook,
   onPasteLookAllCells,
+  olPairs,
 }) {
   const selected = track.clips.filter((c) => selection.includes(c.id))
   const only = selected.length === 1 ? selected[0] : null
@@ -438,6 +562,7 @@ function TrackRow({
               placeholder={track.name}
               onChange={(name) => onClipPatch(track.id, only.id, { name })}
             />
+            <ClipEffectsFields track={track} clip={only} olPairs={olPairs} onPatch={(patch) => onClipPatch(track.id, only.id, patch)} />
             {!simple && (
               <Fold id="clip" title="選んだクリップの尺" meta="開始・長さ" defaultOpen={false}>
                 <div className="row">
@@ -584,6 +709,7 @@ export default function TrackPanel({
   // コピーした配置・撮影処理 { from: トラックid, name, look }
   const [copied, setCopied] = useState(null)
   const cellIds = tracks.filter((t) => t.type === 'cell').map((t) => t.id)
+  const olPairs = dissolvePairs(tracks)
 
   const pickAudio = (r) => {
     role.current = r
@@ -664,6 +790,7 @@ export default function TrackPanel({
               track={t}
               index={i}
               total={tracks.length}
+              olPairs={olPairs}
               selection={selection}
               simple={simple}
               sound={sound}

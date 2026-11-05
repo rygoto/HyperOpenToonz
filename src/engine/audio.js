@@ -1,3 +1,5 @@
+import { scheduleFade } from './timeline.js'
+
 let sharedCtx = null
 
 export function audioContext() {
@@ -166,14 +168,21 @@ export function createAudioEngine() {
         node.playbackRate.value = rate
         const gain = ctx.createGain()
         gain.gain.value = sound.gain
-        node.connect(gain)
+        // フェードは別の GainNode に描く(音量のつまみで gain を書き換えても山が消えないように)
+        const fade = ctx.createGain()
+        scheduleFade(fade.gain, clip, clip.len, skip, (l) => t0 + Math.max(0, (clip.start + l - time) / rate))
+        node.connect(fade)
+        fade.connect(gain)
         gain.connect(master)
         node.start(
           t0 + Math.max(0, (clip.start - time) / rate),
           offset,
           Math.min(dur, buffer.duration - offset),
         )
-        node.onended = () => gain.disconnect()
+        node.onended = () => {
+          fade.disconnect()
+          gain.disconnect()
+        }
         sources.push(node)
         const list = gains.get(track.id)
         if (list) list.push(gain)

@@ -138,9 +138,11 @@ export function splitClip(track, clip, at) {
   const off = (at - clip.start) * u
   const min = minUnits(track)
   if (off < min || clip.len - off < min) return null
+  // フェードインとオーバーラップ(頭に掛かるもの)は前、フェードアウト(尻)は後ろに残す
+  const { fadeOut, ...head } = clip
   return [
-    { ...clip, len: off },
-    { id: nextId('clip'), start: at, in: clip.in + off, len: clip.len - off },
+    { ...head, len: off },
+    { id: nextId('clip'), start: at, in: clip.in + off, len: clip.len - off, ...(fadeOut > 0 ? { fadeOut } : {}) },
   ]
 }
 
@@ -308,4 +310,272 @@ export function offsetClipsTo(clips, at) {
   if (clips.length === 0) return []
   const base = Math.min(...clips.map((c) => c.start))
   return clips.map((c) => ({ ...c, id: nextId('clip'), start: at + (c.start - base) }))
+}
+
+/* ---------- エフェクト ----------
+ *
+ * クリップに持たせる(どれも秒。0 や無しは掛けない)
+ *   dissolve … 映像のオーバーラップ(ディゾルブ)。後ろのクリップに持たせる印(値は掛けたときの重なりの秒)。
+ *              効くのは、タイムライン上で前のクリップ(別レイヤー)と実際に重なっている区間だけ。
+ *              長さを変えるときはクリップの重なりを変える(両方とも自分の素材の範囲を普通に映す)
+ *   olMid    … オーバーラップの推移の具合(0〜1。無しは 0.5 = 一定の速さ)。重なりのちょうど真ん中で、
+ *              後ろのクリップがどれだけ見えているか。大きいほど早く替わり、小さいほど終わり際まで前のクリップが残る
+ *   fadeIn / fadeOut … 音のフェードイン / フェードアウト
+ */
+
+/** olMid の範囲と既定値 */
+export const OL_MID_MIN = 0.05
+export const OL_MID_MAX = 0.95
+export const OL_MID_DEFAULT = 0.5
+
+/** clip の olMid(範囲に収めたもの) */
+export const olMidOf = (clip) => (clip?.olMid > 0 ? Math.min(OL_MID_MAX, Math.max(OL_MID_MIN, clip.olMid)) : OL_MID_DEFAULT)
+
+/**
+ * オーバーラップの進み k(0〜1、時間の割合)のときに、後ろのクリップが見えている割合(0〜1)。
+ * k = 0.5 で mid になる曲線 k^p(mid = 0.5 なら直線)
+ */
+export function olMix(k, mid = OL_MID_DEFAULT) {
+  const x = Math.min(1, Math.max(0, k))
+  const m = Math.min(OL_MID_MAX, Math.max(OL_MID_MIN, mid))
+  return Math.pow(x, Math.log(m) / Math.log(0.5))
+}
+
+/** 前のクリップの尻と後ろのクリップの頭が、これだけ離れていても接しているとみなす(秒。掛けるときだけ使う) */
+export const DISSOLVE_GAP = 0.05
+
+/** オーバーラップとして扱う最短の重なり(秒) */
+const MIN_OVERLAP = 0.001
+
+/** オーバーラップを掛けられるトラック(動画 / 画像のレイヤー) */
+export const canDissolve = (t) => isBg(t) && !t.reference
+
+/** 音のフェードを掛けられるトラック(Web Audio で鳴らすもの) */
+export const canFade = (t) => t.type === 'audio' || (isBg(t) && t.kind === 'video' && !!t.buffer && !t.muted)
+
+/**
+ * clip の頭に重なっている、別のレイヤーの映像クリップ(オーバーラップの相手)。
+ * 頭より前に始まり、尻が頭を越えているもののうち、尻が一番後ろのもの(重なりが一番長い)
+ */
+export function dissolvePartner(tracks, track, clip) {
+  let best = null
+  for (const t of tracks) {
+    if (t.id === track.id || !canDissolve(t)) continue
+    for (const c of t.clips) {
+      if (c.start >= clip.start - 1e-6) continue
+      const end = clipEndSec(t, c)
+      if (end <= clip.start + MIN_OVERLAP) continue
+      if (!best || end > best.end) best = { track: t, clip: c, end }
+    }
+  }
+  return best ? { track: best.track, clip: best.clip } : null
+}
+
+/**
+ * 効いているオーバーラップの一覧。{ a, b, from, to } で、a が前・b が後ろ({ track, clip, index })、
+ * from〜to(秒)が両方を重ねる範囲 = タイムライン上で2つのクリップが重なっているところ
+ */
+export function dissolvePairs(tracks) {
+  const out = []
+  tracks.forEach((t, bi) => {
+    if (!canDissolve(t)) return
+    for (const c of t.clips) {
+      if (!(c.dissolve > 0)) continue
+      const p = dissolvePartner(tracks, t, c)
+      if (!p) continue
+      const to = Math.min(clipEndSec(p.track, p.clip), clipEndSec(t, c))
+      if (!(to - c.start > MIN_OVERLAP)) continue
+      out.push({
+        a: { track: p.track, clip: p.clip, index: tracks.indexOf(p.track) },
+        b: { track: t, clip: c, index: bi },
+        from: c.start,
+        to,
+      })
+    }
+  })
+  return out
+}
+
+/** clipId のクリップが関わるオーバーラップ({ from, to, role: 'in' | 'out' })。無ければ null */
+export function dissolveSpanOf(pairs, clipId) {
+  for (const p of pairs) {
+    if (p.b.clip.id === clipId) return { from: p.from, to: p.to, role: 'in' }
+    if (p.a.clip.id === clipId) return { from: p.from, to: p.to, role: 'out' }
+  }
+  return null
+}
+
+/**
+ * 映像のレイヤーが time に映すもの。{ clip, time(素材内の位置), alpha(不透明度に掛ける) } か null。
+ * pairs は dissolvePairs(tracks) の結果(同じ並びのトラックから作ったもの)。
+ * オーバーラップの範囲では、手前のレイヤーのほうを透かして、奥のレイヤーは普通に映す
+ */
+export function bgFrame(track, time, pairs = []) {
+  let alpha = 1
+  for (const p of pairs) {
+    if (time < p.from || time >= p.to) continue
+    const side = p.a.track.id === track.id ? p.a : p.b.track.id === track.id ? p.b : null
+    if (!side) continue
+    // 後ろのクリップが見えている割合。手前が前のクリップなら、その残りだけ前のクリップを映す
+    const mix = olMix((time - p.from) / (p.to - p.from), olMidOf(p.b.clip))
+    const front = side === p.a ? p.a.index > p.b.index : p.b.index > p.a.index
+    alpha = !front ? 1 : side === p.a ? 1 - mix : mix
+    break
+  }
+  const clip = activeClip(track, time)
+  if (!clip || bgPastEnd(track, clip, time)) return null
+  return { clip, time: bgSourceTime(track, clip, time), alpha }
+}
+
+/** フェードの長さ(秒)。足してクリップより長ければ、比を保って縮める */
+export function fadeSpans(clip, lenSec) {
+  let fi = clip.fadeIn > 0 ? clip.fadeIn : 0
+  let fo = clip.fadeOut > 0 ? clip.fadeOut : 0
+  if (fi + fo > lenSec && fi + fo > 0) {
+    const s = lenSec / (fi + fo)
+    fi *= s
+    fo *= s
+  }
+  return { fadeIn: fi, fadeOut: fo }
+}
+
+/** クリップの頭から local 秒の音量の倍率(0〜1) */
+export function fadeGainAt(clip, lenSec, local) {
+  const { fadeIn, fadeOut } = fadeSpans(clip, lenSec)
+  let g = 1
+  if (fadeIn > 0 && local < fadeIn) g = Math.min(g, Math.max(0, local / fadeIn))
+  if (fadeOut > 0 && local > lenSec - fadeOut) g = Math.min(g, Math.max(0, (lenSec - local) / fadeOut))
+  return g
+}
+
+/**
+ * AudioParam にフェードの山を描く。from〜lenSec(クリップの頭からの秒)を鳴らすとして、
+ * at(local) がその瞬間の AudioContext の時刻を返す
+ */
+export function scheduleFade(param, clip, lenSec, from, at) {
+  const { fadeIn, fadeOut } = fadeSpans(clip, lenSec)
+  param.setValueAtTime(fadeGainAt(clip, lenSec, from), at(from))
+  if (fadeIn <= 0 && fadeOut <= 0) return
+  if (fadeIn > from) param.linearRampToValueAtTime(fadeGainAt(clip, lenSec, fadeIn), at(fadeIn))
+  const foStart = lenSec - fadeOut
+  if (fadeOut > 0) {
+    if (foStart > from) param.setValueAtTime(fadeGainAt(clip, lenSec, foStart), at(foStart))
+    param.linearRampToValueAtTime(0, at(lenSec))
+  }
+}
+
+/** 動画クリップの尻の先に残っている素材(秒)。静止画は無限 */
+function tailRoom(track, clip) {
+  if (track.kind !== 'video' || !(track.duration > 0)) return Infinity
+  return Math.max(0, track.duration - (clip.in + clip.len))
+}
+
+/** 動画クリップの頭の手前に残っている素材(秒)。静止画は無限 */
+const headRoom = (track, clip) => (track.kind === 'video' ? Math.max(0, clip.in) : Infinity)
+
+/**
+ * 選んだ前後2つの映像クリップにオーバーラップを掛ける。
+ * 同じレイヤーにあるときは、後ろのクリップを同じ素材の新しいレイヤーへ移してすぐ手前に置く
+ * (1つの動画の要素では、同時に2か所を映せないため)。layerFor(track) がそのレイヤーをつくる(null なら掛けない)。
+ *
+ * オーバーラップが効くのは2つのクリップが重なっているところだけ。
+ *   すでに重なっている … その重なりをそのまま使う(dur は使わない)
+ *   接している         … 切れ目を真ん中に、前のクリップの尻と後ろのクリップの頭を dur/2 ずつ延ばして重ねる。
+ *                        片側の素材(や隣のクリップまでの隙間)が足りなければ、もう片側を多めに延ばす
+ * 結果は { tracks, overlap(秒), made(延ばして重ねたか) }。掛けられなければ { error }
+ */
+export function applyDissolve(tracks, clipIds, dur, { layerFor }) {
+  const picked = []
+  for (const t of tracks) {
+    if (!canDissolve(t)) continue
+    for (const c of t.clips) if (clipIds.includes(c.id)) picked.push({ track: t, clip: c })
+  }
+  if (picked.length !== 2) return { error: '前後に並んだ動画 / 画像のクリップを2つ選んでください' }
+  picked.sort((x, y) => x.clip.start - y.clip.start)
+  const [a, b] = picked
+  const aEnd = clipEndSec(a.track, a.clip)
+  if (!(a.clip.start < b.clip.start - 1e-6) || aEnd < b.clip.start - DISSOLVE_GAP) {
+    return { error: '2つのクリップが接していません(前のクリップの尻に、後ろのクリップの頭をつけるか、重ねてください)' }
+  }
+
+  // 同じレイヤーなら、後ろのクリップを別のレイヤーへ移す
+  let out = tracks
+  let bTrackId = b.track.id
+  if (a.track.id === b.track.id) {
+    const layer = layerFor(b.track)
+    if (!layer) return { error: 'クリップを別のレイヤーに分けられませんでした' }
+    out = []
+    for (const t of tracks) {
+      if (t.id !== b.track.id) {
+        out.push(t)
+        continue
+      }
+      out.push({ ...t, clips: t.clips.filter((c) => c.id !== b.clip.id) }, { ...layer, clips: [b.clip] })
+    }
+    bTrackId = layer.id
+  }
+  const aTrack = out.find((t) => t.id === a.track.id)
+  const bTrack = out.find((t) => t.id === bTrackId)
+  const bEnd = clipEndSec(bTrack, b.clip)
+
+  let head = 0 // 後ろのクリップの頭を手前へ延ばす秒
+  let tail = 0 // 前のクリップの尻を先へ延ばす秒
+  let overlap = aEnd - b.clip.start
+  const made = !(overlap > MIN_OVERLAP)
+  if (made) {
+    const gap = Math.max(0, -overlap)
+    // 延ばせる上限: 素材の余り / 同じレイヤーの隣のクリップまで / 相手のクリップを追い越さない
+    const prevEnd = Math.max(-Infinity, ...bTrack.clips.filter((c) => c.id !== b.clip.id && c.start < b.clip.start).map((c) => clipEndSec(bTrack, c)))
+    const nextStart = Math.min(Infinity, ...aTrack.clips.filter((c) => c.id !== a.clip.id && c.start > a.clip.start).map((c) => c.start))
+    const headMax = Math.max(0, Math.min(headRoom(bTrack, b.clip), b.clip.start - Math.max(prevEnd, 0), b.clip.start - a.clip.start - MIN_OVERLAP))
+    const tailMax = Math.max(0, Math.min(tailRoom(aTrack, a.clip), nextStart - aEnd, bEnd - aEnd - MIN_OVERLAP))
+    head = Math.min(dur / 2, headMax)
+    tail = Math.min(dur - head + gap, tailMax)
+    head = Math.min(headMax, Math.max(head, dur - (tail - gap)))
+    overlap = head + tail - gap
+    if (!(overlap > MIN_OVERLAP)) {
+      return { error: '素材の余りが無いので重ねられません(2つのクリップをタイムライン上で重ねてから掛けてください)' }
+    }
+  }
+
+  const round = (x) => Math.round(x * 100) / 100
+  const nextB = {
+    ...b.clip,
+    start: b.clip.start - head,
+    in: bTrack.kind === 'video' ? b.clip.in - head : b.clip.in,
+    len: b.clip.len + head,
+    dissolve: round(overlap),
+  }
+  const nextA = { ...a.clip, len: a.clip.len + tail }
+  return {
+    tracks: out.map((t) => {
+      if (t.id === bTrack.id) return replaceClips(t, t.clips.map((c) => (c.id === b.clip.id ? nextB : c)))
+      if (t.id === aTrack.id && tail > 0) return replaceClips(t, t.clips.map((c) => (c.id === a.clip.id ? nextA : c)))
+      return t
+    }),
+    overlap: round(overlap),
+    made,
+  }
+}
+
+/** 選んだクリップの、エフェクトの値を書き換える(patch の値が 0 / null なら外す) */
+export function patchClipEffects(tracks, clipIds, patch, allow = () => true) {
+  let changed = false
+  const next = tracks.map((t) => {
+    if (!allow(t) || !t.clips.some((c) => clipIds.includes(c.id))) return t
+    changed = true
+    return {
+      ...t,
+      clips: t.clips.map((c) => {
+        if (!clipIds.includes(c.id)) return c
+        const out = { ...c }
+        for (const [k, v] of Object.entries(patch)) {
+          if (v > 0) out[k] = v
+          else delete out[k]
+        }
+        return out
+      }),
+    }
+  })
+  return changed ? next : tracks
 }

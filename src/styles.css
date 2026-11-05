@@ -565,6 +565,59 @@ input[type="color"] {
   width: auto;
 }
 
+/* エフェクトのメニュー(再生バーの上に開く) */
+.fxmenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.fxmenu__panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: min(340px, calc(100vw - 32px));
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fxmenu__group h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+
+.fxmenu__hint {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.fxmenu__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.fxmenu__sec {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  margin-right: auto;
+  white-space: nowrap;
+}
+
+.fxmenu__sec input {
+  width: 62px;
+}
+
 .transport__audio {
   display: flex;
   align-items: center;
@@ -783,6 +836,55 @@ input[type="color"] {
   right: 0;
   background: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.75) 0 6px, rgba(0, 0, 0, 0.55) 6px 12px);
   pointer-events: none;
+}
+
+.clip__fade {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.clip__fade--in {
+  left: 0;
+}
+
+.clip__fade--out {
+  right: 0;
+}
+
+.clip__fade path {
+  fill: rgba(0, 0, 0, 0.45);
+}
+
+.clip__fade line {
+  stroke: #fff;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.clip__ol {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.08));
+  border-right: 1px dashed rgba(255, 255, 255, 0.7);
+  color: #10202f;
+  font-size: 9px;
+  font-weight: 700;
+  padding-left: 3px;
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+/* 前のクリップ側は尻に向かって消えていく帯 */
+.clip__ol--out {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.55));
+  border-right: 0;
+  border-left: 1px dashed rgba(255, 255, 255, 0.7);
 }
 
 .clip__wave {
@@ -1753,4 +1855,65 @@ input[type="color"] {
 .clip__name {
   margin-right: 6px;
   font-weight: 600;
+}
+
+/* 選んだクリップのエフェクトの調整(左のパネル) */
+.layer__effects {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.layer__effects-title {
+  font-size: 11px;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+
+.layer__effects .row {
+  align-items: flex-end;
+}
+
+.layer__effects-hint {
+  margin: 4px 0 0;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+/* オーバーラップの替わり方 */
+.ol-curve {
+  margin-top: 6px;
+}
+
+.ol-curve input[type='range'] {
+  width: 100%;
+}
+
+.ol-curve__foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ol-curve__foot .layer__effects-hint {
+  flex: 1;
+  margin: 0;
+}
+
+.ol-curve__graph {
+  width: 40px;
+  height: 20px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+.ol-curve__graph polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
 }

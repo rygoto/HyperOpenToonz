@@ -58,6 +58,14 @@ import {
   clipLenSec,
   clipsInRange,
   detachAudio,
+  applyDissolve,
+  bgFrame,
+  dissolvePairs,
+  olMix,
+  fadeGainAt,
+  fadeSpans,
+  patchClipEffects,
+  scheduleFade,
   outputTracks,
   makeClip,
   offsetClipsTo,
@@ -1312,4 +1320,176 @@ test('クリップの名前: シーンに保存して読み戻せ、Resolve で�
   assert.ok(named)
   assert.match(xml, new RegExp(`<asset-clip ref="${named[1]}" offset="0s" name="カット1"`))
   assert.match(xml, /<asset id="r\d+" name="cut\.mp4"/)
+})
+
+// ---------- エフェクト ----------
+
+const vidTrack = (over = {}) => bgTrack({ kind: 'video', duration: 10, ...over })
+
+test('オーバーラップ: 同じレイヤーの前後2つに掛けると、後ろを別のレイヤーへ移し、前後を延ばして重ねる', () => {
+  const t = vidTrack({ clips: [{ id: 'a', start: 0, in: 0, len: 2 }, { id: 'b', start: 2, in: 5, len: 2 }] })
+  const out = applyDissolve([t], ['b', 'a'], 1, { layerFor: (tr) => ({ ...tr, id: 'b2' }) })
+  assert.equal(out.error, undefined)
+  assert.equal(out.made, true)
+  assert.equal(out.overlap, 1)
+  assert.deepEqual(out.tracks.map((x) => x.id), ['b1', 'b2'])
+  // 前は尻を 0.5 延ばし、後ろは頭を 0.5 手前へ(素材の位置もそのぶん戻す)
+  assert.deepEqual(out.tracks[0].clips.map((c) => [c.id, c.start, c.len]), [['a', 0, 2.5]])
+  const b = out.tracks[1].clips[0]
+  assert.deepEqual([b.start, b.in, b.len, b.dissolve], [1.5, 4.5, 2.5, 1])
+
+  const [p] = dissolvePairs(out.tracks)
+  assert.equal(p.from, 1.5)
+  assert.equal(p.to, 2.5)
+  // 重なりの中: どちらも自分のクリップの素材を普通に映し、手前(後ろのクリップ)を透かす
+  const fa = bgFrame(out.tracks[0], 1.75, [p])
+  const fb = bgFrame(out.tracks[1], 1.75, [p])
+  assert.equal(fa.alpha, 1)
+  assert.ok(Math.abs(fb.alpha - 0.25) < 1e-9)
+  assert.ok(Math.abs(fb.time - 4.75) < 1e-9)
+  assert.ok(Math.abs(bgFrame(out.tracks[0], 2.25, [p]).time - 2.25) < 1e-9)
+  // 範囲の外はいつもどおり
+  assert.equal(bgFrame(out.tracks[0], 3, [p]), null)
+  assert.equal(bgFrame(out.tracks[1], 3, [p]).alpha, 1)
+})
+
+test('オーバーラップ: 後ろの頭の手前に素材が無ければ、前の尻を多めに延ばす', () => {
+  const a = vidTrack({ id: 'x', clips: [{ id: 'a', start: 0, in: 0, len: 2 }] })
+  const b = vidTrack({ id: 'y', clips: [{ id: 'b', start: 2, in: 0, len: 2 }] })
+  const out = applyDissolve([a, b], ['a', 'b'], 1, { layerFor: () => null })
+  assert.equal(out.overlap, 1)
+  assert.equal(out.tracks[0].clips[0].len, 3)
+  assert.deepEqual([out.tracks[1].clips[0].start, out.tracks[1].clips[0].in], [2, 0])
+  // 後ろのクリップの頭より前では、後ろのレイヤーは何も映さない(先頭のコマを繰り返さない)
+  const pairs = dissolvePairs(out.tracks)
+  assert.equal(bgFrame(out.tracks[1], 1.9, pairs), null)
+  assert.ok(Math.abs(bgFrame(out.tracks[1], 2.5, pairs).time - 0.5) < 1e-9)
+})
+
+test('オーバーラップ: どちらにも素材の余りが無ければ掛けない', () => {
+  const a = vidTrack({ id: 'x', duration: 2, clips: [{ id: 'a', start: 0, in: 0, len: 2 }] })
+  const b = vidTrack({ id: 'y', clips: [{ id: 'b', start: 2, in: 0, len: 2 }] })
+  assert.match(applyDissolve([a, b], ['a', 'b'], 1, { layerFor: () => null }).error, /素材の余り/)
+})
+
+test('オーバーラップ: すでに重なっていれば、その重なりをそのまま使う', () => {
+  const a = vidTrack({ id: 'x', clips: [{ id: 'a', start: 0, in: 0, len: 3 }] })
+  const b = vidTrack({ id: 'y', clips: [{ id: 'b', start: 2.2, in: 0, len: 3 }] })
+  const out = applyDissolve([a, b], ['a', 'b'], 5, { layerFor: () => null })
+  assert.equal(out.made, false)
+  assert.equal(out.overlap, 0.8)
+  assert.equal(out.tracks[0].clips[0].len, 3)
+  const [p] = dissolvePairs(out.tracks)
+  assert.ok(Math.abs(p.from - 2.2) < 1e-9 && Math.abs(p.to - 3) < 1e-9)
+  // 重なりを変えれば、長さもそれに付いてくる
+  const moved = [a, { ...out.tracks[1], clips: [{ ...out.tracks[1].clips[0], start: 2.5 }] }]
+  const [q] = dissolvePairs(moved)
+  assert.ok(Math.abs(q.to - q.from - 0.5) < 1e-9)
+})
+
+test('オーバーラップ: 手前のレイヤーが前のクリップなら、そちらを透かしていく', () => {
+  const lo = vidTrack({ id: 'lo', clips: [{ id: 'b', start: 1.5, in: 0, len: 2.5, dissolve: 1 }] })
+  const hi = vidTrack({ id: 'hi', clips: [{ id: 'a', start: 0, in: 0, len: 2.5 }] })
+  const tracks = [lo, hi]
+  const pairs = dissolvePairs(tracks)
+  assert.equal(pairs.length, 1)
+  assert.ok(Math.abs(bgFrame(hi, 1.75, pairs).alpha - 0.75) < 1e-9)
+  assert.equal(bgFrame(lo, 1.75, pairs).alpha, 1)
+})
+
+test('オーバーラップ: 替わり方(olMid)で、真ん中の見え方が変わる', () => {
+  assert.equal(olMix(0.5), 0.5)
+  assert.ok(Math.abs(olMix(0.5, 0.8) - 0.8) < 1e-9)
+  assert.equal(olMix(0, 0.8), 0)
+  assert.equal(olMix(1, 0.2), 1)
+  const lo = vidTrack({ id: 'lo', clips: [{ id: 'a', start: 0, in: 0, len: 3 }] })
+  const hi = vidTrack({ id: 'hi', clips: [{ id: 'b', start: 2, in: 0, len: 3, dissolve: 1, olMid: 0.8 }] })
+  const pairs = dissolvePairs([lo, hi])
+  assert.ok(Math.abs(bgFrame(hi, 2.5, pairs).alpha - 0.8) < 1e-9)
+  // 手前が前のクリップなら、その残り(1 - 0.8)だけ映す
+  const pairs2 = dissolvePairs([hi, lo])
+  assert.ok(Math.abs(bgFrame(lo, 2.5, pairs2).alpha - 0.2) < 1e-9)
+})
+
+test('オーバーラップ: 離れた2つには掛けない。接しているだけ(重なっていない)なら効かない', () => {
+  const t = vidTrack({ clips: [{ id: 'a', start: 0, in: 0, len: 2 }, { id: 'b', start: 3, in: 0, len: 2 }] })
+  assert.match(applyDissolve([t], ['a', 'b'], 1, { layerFor: (tr) => tr }).error, /接して/)
+  const lone = [vidTrack({ id: 'x', clips: [{ id: 'b', start: 3, in: 0, len: 2, dissolve: 1 }] }), vidTrack({ id: 'y', clips: [{ id: 'a', start: 0, in: 0, len: 2 }] })]
+  assert.deepEqual(dissolvePairs(lone), [])
+  const butt = [vidTrack({ id: 'x', clips: [{ id: 'b', start: 2, in: 0, len: 2, dissolve: 1 }] }), vidTrack({ id: 'y', clips: [{ id: 'a', start: 0, in: 0, len: 2 }] })]
+  assert.deepEqual(dissolvePairs(butt), [])
+})
+
+test('フェード: 頭と尻で音量が 0 から 1、1 から 0 へ', () => {
+  const c = { start: 0, in: 0, len: 4, fadeIn: 1, fadeOut: 2 }
+  assert.equal(fadeGainAt(c, 4, 0), 0)
+  assert.equal(fadeGainAt(c, 4, 0.5), 0.5)
+  assert.equal(fadeGainAt(c, 4, 1.5), 1)
+  assert.equal(fadeGainAt(c, 4, 3), 0.5)
+  assert.equal(fadeGainAt(c, 4, 4), 0)
+  // 足してクリップより長ければ縮める
+  assert.deepEqual(fadeSpans({ fadeIn: 3, fadeOut: 3 }, 2), { fadeIn: 1, fadeOut: 1 })
+})
+
+test('フェード: 途中から鳴らしても、山の続きから描く', () => {
+  const calls = []
+  const param = {
+    setValueAtTime: (v, t) => calls.push(['set', v, t]),
+    linearRampToValueAtTime: (v, t) => calls.push(['ramp', v, t]),
+  }
+  const c = { start: 10, in: 0, len: 4, fadeIn: 2, fadeOut: 1 }
+  scheduleFade(param, c, 4, 1, (l) => 100 + l)
+  assert.deepEqual(calls, [
+    ['set', 0.5, 101],
+    ['ramp', 1, 102],
+    ['set', 1, 103],
+    ['ramp', 0, 104],
+  ])
+})
+
+test('エフェクト: 分割するとフェードインは前、フェードアウトは後ろに残り、保存しても消えない', () => {
+  const t = audioTrack({ clips: [{ id: 'c', start: 0, in: 0, len: 4, fadeIn: 1, fadeOut: 1 }] })
+  const [a, b] = splitClip(t, t.clips[0], 2)
+  assert.equal(a.fadeIn, 1)
+  assert.equal(a.fadeOut, undefined)
+  assert.equal(b.fadeOut, 1)
+  assert.equal(b.fadeIn, undefined)
+
+  const off = patchClipEffects([t], ['c'], { fadeIn: 0 })
+  assert.equal(off[0].clips[0].fadeIn, undefined)
+  assert.equal(off[0].clips[0].fadeOut, 1)
+
+  const scene = parseScene(
+    sceneToText(
+      serializeScene({
+        tracks: [audioTrack({ name: 'tone', fileName: 'tone.wav', clips: [{ id: 'c', start: 0, in: 0, len: 4, fadeIn: 0.5 }] })],
+        stage: { width: 640, height: 360, autoSize: false, bgColor: '#000000', checker: false },
+        projectFps: 24,
+        muted: false,
+        volume: 1,
+        name: 'fx',
+      }),
+    ),
+  )
+  assert.deepEqual(scene.tracks[0].clips, [{ start: 0, in: 0, len: 4, fadeIn: 0.5 }])
+})
+
+test('エフェクト: .piyo にまとめて開き直しても、オーバーラップとフェードが残る', async () => {
+  const { packBundle, trackSources, unpackBundle } = await import('../src/engine/bundle.js')
+  const bytes = (n, seed) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 0xff)
+  const v1 = markPath(new File([bytes(500, 1)], 'a.mp4'), 'work/a.mp4')
+  const v2 = markPath(new File([bytes(500, 2)], 'b.mp4'), 'work/b.mp4')
+  const wav = markPath(new File([bytes(300, 3)], 'bgm.wav'), 'work/bgm.wav')
+  const tracks = [
+    vidTrack({ id: 'x', name: 'a', fileName: 'a.mp4', path: 'work/a.mp4', sources: [v1], fx: undefined, clips: [{ id: 'a', start: 0, in: 0, len: 2 }] }),
+    vidTrack({ id: 'y', name: 'b', fileName: 'b.mp4', path: 'work/b.mp4', sources: [v2], fx: undefined, clips: [{ id: 'b', start: 2, in: 0, len: 2, dissolve: 0.75 }] }),
+    audioTrack({ name: 'bgm', fileName: 'bgm.wav', path: 'work/bgm.wav', sources: [wav], clips: [{ id: 'c', start: 0, in: 0, len: 4, fadeIn: 1.5, fadeOut: 2 }] }),
+  ]
+  const doc = serializeScene({ tracks, stage: {}, projectFps: 24, muted: false, volume: 1, name: 'fx', folders: [], mode: 'sound' })
+  const blob = await packBundle(doc, trackSources(tracks).assets)
+  const { text } = await unpackBundle(new File([blob], 'fx.piyo'))
+  const scene = parseScene(text)
+  assert.deepEqual(scene.tracks[0].clips, [{ start: 0, in: 0, len: 2 }])
+  assert.deepEqual(scene.tracks[1].clips, [{ start: 2, in: 0, len: 2, dissolve: 0.75 }])
+  assert.deepEqual(scene.tracks[2].clips, [{ start: 0, in: 0, len: 4, fadeIn: 1.5, fadeOut: 2 }])
 })

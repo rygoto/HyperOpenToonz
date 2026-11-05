@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   bgOverrunSec,
+  canFade,
+  fadeSpans,
   clipEndSec,
   clipLenSec,
+  dissolvePairs,
+  dissolveSpanOf,
   isVisual,
   rippleFrom,
   sortClips,
@@ -66,7 +70,45 @@ function Wave({ track, clip, width }) {
   return <canvas ref={ref} className="clip__wave" />
 }
 
-function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
+/**
+ * クリップに掛けたエフェクトの印。フェードは音量の斜め線、
+ * オーバーラップは2つのクリップが重なっている区間の帯(後ろのクリップは頭、前のクリップは尻)
+ */
+function ClipEffects({ track, clip, lenSec, pxPerSec, ol }) {
+  const { fadeIn, fadeOut } = canFade(track) ? fadeSpans(clip, lenSec) : { fadeIn: 0, fadeOut: 0 }
+  const olSec = ol ? ol.to - ol.from : 0
+  const olPx = olSec * pxPerSec
+  const olLeft = ol ? (ol.from - clip.start) * pxPerSec : 0
+  return (
+    <>
+      {fadeIn > 0 && (
+        <svg className="clip__fade clip__fade--in" style={{ width: fadeIn * pxPerSec }} viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
+          <title>フェードイン {fadeIn.toFixed(2)}秒</title>
+          <path d="M0 0 L1 0 L0 1 Z" />
+          <line x1="0" y1="1" x2="1" y2="0" />
+        </svg>
+      )}
+      {fadeOut > 0 && (
+        <svg className="clip__fade clip__fade--out" style={{ width: fadeOut * pxPerSec }} viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
+          <title>フェードアウト {fadeOut.toFixed(2)}秒</title>
+          <path d="M0 0 L1 0 L1 1 Z" />
+          <line x1="0" y1="0" x2="1" y2="1" />
+        </svg>
+      )}
+      {olPx >= 1 && (
+        <div
+          className={'clip__ol clip__ol--' + ol.role}
+          style={{ left: olLeft, width: olPx }}
+          title={`オーバーラップ ${olSec.toFixed(2)}秒(${ol.role === 'in' ? '前のクリップから溶けて替わる' : '後ろのクリップへ溶けて替わる'}。長さはクリップの重なりで変わります)`}
+        >
+          {olPx >= 18 && 'OL'}
+        </div>
+      )}
+    </>
+  )
+}
+
+function ClipView({ track, clip, pxPerSec, selected, onGrab, ol }) {
   const lenSec = clipLenSec(track, clip)
   const left = clip.start * pxPerSec
   const width = Math.max(3, lenSec * pxPerSec)
@@ -100,6 +142,7 @@ function ClipView({ track, clip, pxPerSec, selected, onGrab }) {
       />
       {(track.type === 'audio' || (track.peaks && !track.muted)) && width > 8 && <Wave track={track} clip={clip} width={width} />}
       {voidPx >= 1 && <div className="clip__void" style={{ width: voidPx }} title="素材が終わっているので何も映りません" />}
+      <ClipEffects track={track} clip={clip} lenSec={lenSec} pxPerSec={pxPerSec} ol={ol} />
       <span className="clip__label" title={clip.name || undefined}>
         {clip.name && <b className="clip__name">{clip.name}</b>}
         {isCellTrack
@@ -139,6 +182,8 @@ export default function Timeline({
   const pointers = useRef(new Map())
   const pinch = useRef(null)
   const pxRef = useRef(90)
+  // オーバーラップが効いている区間(クリップの重なり)。帯の印に使う
+  const olPairs = useMemo(() => dissolvePairs(tracks), [tracks])
 
   useEffect(() => {
     pxRef.current = pxPerSec
@@ -521,6 +566,7 @@ export default function Timeline({
                     pxPerSec={pxPerSec}
                     selected={selection.includes(c.id)}
                     onGrab={onGrab}
+                    ol={dissolveSpanOf(olPairs, c.id)}
                   />
                 ))}
               </div>

@@ -13,7 +13,7 @@ import {
   canEncodeVideo,
 } from 'mediabunny'
 import { composite } from './compositor.js'
-import { activeClip, bgPastEnd, bgSourceTime } from './timeline.js'
+import { bgFrame, dissolvePairs } from './timeline.js'
 import { evenSize, bufferHasSignal, decodeBgAudio, mixProjectAudio } from './mixAudio.js'
 
 function sleep(ms) {
@@ -122,13 +122,14 @@ async function openFrameReader(track, times) {
 /** 書き出す全コマぶん、背景動画ごとの読み手を用意する(用意できない動画は <video> のシークに任せる) */
 async function frameReaders(view, total, dt, duration) {
   const readers = new Map()
+  const pairs = dissolvePairs(view.tracks)
   for (const track of view.tracks) {
     if (track.type !== 'bg' || track.kind !== 'video' || !track.el) continue
     const times = []
     for (let i = 0; i < total; i++) {
       const t = Math.min(duration, i * dt)
-      const clip = activeClip(track, t)
-      times.push(clip && !bgPastEnd(track, clip, t) ? bgSourceTime(track, clip, t) + FRAME_EPSILON : null)
+      const frame = bgFrame(track, t, pairs)
+      times.push(frame ? frame.time + FRAME_EPSILON : null)
     }
     const reader = await openFrameReader(track, times)
     if (reader) readers.set(track.id, reader)
@@ -178,6 +179,7 @@ async function prepareCanvas(view, { exact = false } = {}) {
 /** i コマ目(time 秒)を描く。デコードした絵がある動画は、video 要素の代わりにそれを使う */
 async function paintFrame(ctx, exportView, time, i, readers) {
   const tracks = []
+  const pairs = dissolvePairs(exportView.tracks)
   for (const track of exportView.tracks) {
     if (track.type !== 'bg' || track.kind !== 'video' || !track.el) {
       tracks.push(track)
@@ -189,8 +191,8 @@ async function paintFrame(ctx, exportView, time, i, readers) {
       tracks.push(frame ? { ...track, el: frame } : track)
       continue
     }
-    const clip = activeClip(track, time)
-    if (clip) await seekVideo(track.el, bgSourceTime(track, clip, time))
+    const frame = bgFrame(track, time, pairs)
+    if (frame) await seekVideo(track.el, frame.time)
     tracks.push(track)
   }
   composite(ctx, { ...exportView, tracks }, time)

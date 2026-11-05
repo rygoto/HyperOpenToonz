@@ -1,4 +1,4 @@
-import { useRef, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { BACKGROUND_ACCEPT } from '../engine/media.js'
 
 function fmt(t) {
@@ -8,6 +8,146 @@ function fmt(t) {
   const s = Math.floor(a % 60)
   const ms = Math.floor((a % 1) * 1000)
   return `${sign}${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`
+}
+
+/** 秒の入力。空や負は既定の値に戻す */
+function SecInput({ value, onChange, label }) {
+  return (
+    <label className="fxmenu__sec">
+      {label}
+      <input
+        type="number"
+        min="0.05"
+        max="30"
+        step="0.05"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      秒
+    </label>
+  )
+}
+
+const secOf = (v, fallback) => {
+  const x = Number(v)
+  return Number.isFinite(x) && x > 0 ? Math.min(30, Math.round(x * 100) / 100) : fallback
+}
+
+/**
+ * エフェクトのメニュー。選んでいるクリップに掛ける
+ *   映像 … オーバーラップ(ディゾルブ)。前後に並んだ動画 / 画像のクリップを2つ選ぶ
+ *   音声 … フェードイン / フェードアウト。音声のクリップ(何個でも)
+ */
+function EffectsMenu({ info, onDissolve, onClearDissolve, onFade }) {
+  const [open, setOpen] = useState(false)
+  const [dis, setDis] = useState('1')
+  const [fin, setFin] = useState('1')
+  const [fout, setFout] = useState('1')
+  const root = useRef(null)
+  const panel = useRef(null)
+
+  // 画面の端からはみ出さないよう、横にずらす
+  useLayoutEffect(() => {
+    const el = panel.current
+    if (!open || !el) return
+    el.style.transform = ''
+    const r = el.getBoundingClientRect()
+    const gutter = 16
+    let dx = 0
+    if (r.right > window.innerWidth - gutter) dx = window.innerWidth - gutter - r.right
+    if (r.left + dx < gutter) dx = gutter - r.left
+    if (dx) el.style.transform = `translateX(${dx}px)`
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e) => {
+      if (!root.current?.contains(e.target)) setOpen(false)
+    }
+    const esc = (e) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', esc)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', esc)
+    }
+  }, [open])
+
+  const fades = info.fadeCount > 0
+  return (
+    <span className="fxmenu" ref={root}>
+      <button
+        type="button"
+        className={open ? 'primary' : ''}
+        aria-expanded={open}
+        title="選んだクリップにエフェクトを掛ける(映像のオーバーラップ / 音のフェード)"
+        onClick={() => {
+          // 開くときに、選んでいるクリップに掛かっている長さを入れておく
+          if (!open) {
+            if (info.dissolve > 0) setDis(String(info.dissolve))
+            if (info.fadeIn > 0) setFin(String(info.fadeIn))
+            if (info.fadeOut > 0) setFout(String(info.fadeOut))
+          }
+          setOpen(!open)
+        }}
+      >
+        エフェクト ▾
+      </button>
+      {open && (
+        <div ref={panel} className="fxmenu__panel" role="dialog" aria-label="エフェクト">
+          <section className="fxmenu__group">
+            <h4>映像: オーバーラップ(ディゾルブ)</h4>
+            <p className="fxmenu__hint">
+              {info.canDissolve
+                ? '2つのクリップが重なっている区間で溶けるように替わります。接しているだけなら、切れ目を真ん中に前後を延ばして「長さ」ぶん重ねます(重なっていればその重なりを使います)'
+                : '前後に並んだ動画 / 画像のクリップを2つ選んでください(Shift / Ctrl を押しながらクリック)'}
+            </p>
+            <div className="fxmenu__row">
+              <SecInput label="長さ" value={dis} onChange={setDis} />
+              <button
+                type="button"
+                className="primary"
+                disabled={!info.canDissolve}
+                onClick={() => {
+                  onDissolve(secOf(dis, 1))
+                  setOpen(false)
+                }}
+              >
+                {info.dissolved > 0 ? '掛け直す' : '掛ける'}
+              </button>
+              <button type="button" disabled={!(info.dissolved > 0)} onClick={onClearDissolve}>
+                外す
+              </button>
+            </div>
+          </section>
+          <section className="fxmenu__group">
+            <h4>音声: フェード</h4>
+            {!fades && <p className="fxmenu__hint">音声のクリップを選んでください</p>}
+            <div className="fxmenu__row">
+              <SecInput label="フェードイン" value={fin} onChange={setFin} />
+              <button type="button" className="primary" disabled={!fades} onClick={() => onFade({ fadeIn: secOf(fin, 1) })}>
+                {info.fadeIn > 0 ? '変更' : '掛ける'}
+              </button>
+              <button type="button" disabled={!(fades && info.fadeIn > 0)} onClick={() => onFade({ fadeIn: 0 })}>
+                外す
+              </button>
+            </div>
+            <div className="fxmenu__row">
+              <SecInput label="フェードアウト" value={fout} onChange={setFout} />
+              <button type="button" className="primary" disabled={!fades} onClick={() => onFade({ fadeOut: secOf(fout, 1) })}>
+                {info.fadeOut > 0 ? '変更' : '掛ける'}
+              </button>
+              <button type="button" disabled={!(fades && info.fadeOut > 0)} onClick={() => onFade({ fadeOut: 0 })}>
+                外す
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </span>
+  )
 }
 
 export default function Transport({
@@ -31,6 +171,10 @@ export default function Transport({
   onDetach,
   canAnimate,
   onAnimate,
+  effects,
+  onDissolve,
+  onClearDissolve,
+  onFade,
   onUndo,
   onRedo,
   sheetOpen,
@@ -111,6 +255,9 @@ export default function Transport({
           >
             アニメーションで作る
           </button>
+        )}
+        {effects && (
+          <EffectsMenu info={effects} onDissolve={onDissolve} onClearDissolve={onClearDissolve} onFade={onFade} />
         )}
         <button type="button" title="元に戻す (Ctrl+Z)" onClick={onUndo}>↺</button>
         <button type="button" title="やり直す (Ctrl+Shift+Z)" onClick={onRedo}>↻</button>

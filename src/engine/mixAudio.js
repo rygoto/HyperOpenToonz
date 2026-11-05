@@ -1,4 +1,5 @@
 import { audioContext } from './audio.js'
+import { scheduleFade } from './timeline.js'
 
 /** H.264 は偶数解像度が必要なので揃える */
 export function evenSize(n) {
@@ -45,7 +46,10 @@ function scheduleClips(ctx, master, track, buffer, gainValue, dur) {
     src.buffer = buffer
     const gain = ctx.createGain()
     gain.gain.value = gainValue
-    src.connect(gain)
+    const fade = ctx.createGain()
+    scheduleFade(fade.gain, clip, clip.len, 0, (l) => Math.max(0, clip.start + l))
+    src.connect(fade)
+    fade.connect(gain)
     gain.connect(master)
     src.start(Math.max(0, clip.start), skip, playDur)
   }

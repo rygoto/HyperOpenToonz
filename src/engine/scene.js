@@ -48,7 +48,18 @@ const str = (v, fallback = '') => (typeof v === 'string' && v ? v : fallback)
 
 /* ---------------- 書き出し ---------------- */
 
-const clipJson = (c) => ({ start: r(c.start), in: r(c.in), len: r(c.len), ...(c.name ? { name: c.name } : {}) })
+/** クリップに掛けたエフェクト(olMid 以外は秒)。掛けていないものは書かない */
+const EFFECT_KEYS = ['dissolve', 'olMid', 'fadeIn', 'fadeOut']
+const effectsOf = (c, round = (v) => v) => {
+  const out = {}
+  for (const k of EFFECT_KEYS) {
+    const v = Number(c?.[k])
+    if (Number.isFinite(v) && v > 0) out[k] = round(v)
+  }
+  return out
+}
+
+const clipJson = (c) => ({ start: r(c.start), in: r(c.in), len: r(c.len), ...(c.name ? { name: c.name } : {}), ...effectsOf(c, r) })
 
 /** 絵のレイヤーに共通する、置き方と見え方 */
 const placeJson = (t) => ({
@@ -170,6 +181,7 @@ function clipIn(c) {
     in: Math.max(0, num(c?.in, 0)),
     len: num(c?.len, 0),
     ...(typeof c?.name === 'string' && c.name.trim() ? { name: c.name.trim() } : {}),
+    ...effectsOf(c),
   }
 }
 
@@ -390,7 +402,7 @@ function fitClips(track, clips) {
     let len = c.len
     if (Number.isFinite(total) && !isBg(track)) len = Math.min(len, total - from)
     if (!(len >= min)) continue
-    out.push({ id: nextId('clip'), start: c.start, in: from, len, ...(c.name ? { name: c.name } : {}) })
+    out.push({ id: nextId('clip'), start: c.start, in: from, len, ...(c.name ? { name: c.name } : {}), ...effectsOf(c) })
   }
   return out.length > 0 ? sortClips(out) : [makeClip(track, { start: 0 })]
 }

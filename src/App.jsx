@@ -4,7 +4,10 @@ import { createAudioEngine, decodeAudioFile, decodeVideoAudio } from './engine/a
 import { MODE_IDS, MODES, ROLE_LABEL, SPEAKERS, normalizeSpeakerList, usedSpeakers } from './modes.js'
 import { nextId } from './engine/ids.js'
 import {
+  applyDissolve,
   canDetachAudio,
+  canDissolve,
+  canFade,
   clipContains,
   clipEndSec,
   clipsInRange,
@@ -12,6 +15,7 @@ import {
   isVisual,
   makeClip,
   outputTracks,
+  patchClipEffects,
   projectDurationSec,
   repeatToFill,
   replaceClipSource,
@@ -993,6 +997,84 @@ export default function App({
       count > 0 ? 'info' : 'error',
     )
   }, [commit, say])
+
+  // ---------- エフェクト ----------
+  /** 選んだ前後2つの映像クリップにオーバーラップ(ディゾルブ)を掛ける。dur は秒 */
+  const dissolveSelection = useCallback(
+    async (dur) => {
+      const sel = selectionRef.current
+      const picked = tracksRef.current.flatMap((t) => (canDissolve(t) ? t.clips.filter((c) => sel.includes(c.id)).map((c) => ({ t, c })) : []))
+      if (picked.length !== 2) {
+        say('前後に並んだ動画 / 画像のクリップを2つ選んでください', 'error')
+        return
+      }
+      picked.sort((x, y) => x.c.start - y.c.start)
+      // 同じレイヤーの2つなら、後ろのクリップを別のレイヤーへ移す。動画は要素をもう1つ作る
+      let layer = null
+      const b = picked[1].t
+      if (picked[0].t.id === b.id) {
+        if (b.kind === 'video') {
+          const file = b.sources?.[0]
+          if (!file) {
+            say('素材の実物が無いので、クリップを別のレイヤーに分けられません', 'error')
+            return
+          }
+          setBusy({ label: '動画を用意中…' })
+          try {
+            const src = await loadBackground(file)
+            layer = { ...b, id: nextId('track'), el: src.el, url: src.url }
+          } catch (e) {
+            say(e?.message || '動画を読み込めませんでした', 'error')
+            return
+          } finally {
+            setBusy(null)
+          }
+        } else {
+          layer = { ...b, id: nextId('track') }
+        }
+      }
+      const out = applyDissolve(tracksRef.current, sel, dur, { layerFor: () => layer })
+      if (out.error) {
+        say(out.error, 'error')
+        return
+      }
+      commit(out.tracks)
+      const how = out.made ? '前後のクリップを延ばして重ねました' : '重なっているところに掛けました'
+      const short = out.made && out.overlap < dur - 0.005 ? '。素材が足りないので短くなっています' : ''
+      say(`オーバーラップ(${out.overlap}秒)を掛けました(${how}${layer ? '。後ろのクリップは別のレイヤーに分けました' : ''}${short})`)
+    },
+    [commit, say],
+  )
+
+  /** 選んだクリップのエフェクトを書き換える。patch は { dissolve, fadeIn, fadeOut } の一部(0 で外す) */
+  const setSelectionEffects = useCallback(
+    (patch, allow) => {
+      commit((prev) => patchClipEffects(prev, selectionRef.current, patch, allow))
+    },
+    [commit],
+  )
+
+  // 選んだクリップの、エフェクトを掛けられる / 掛かっている具合(エフェクトのメニュー用)
+  const effectInfo = useMemo(() => {
+    const visual = []
+    const audible = []
+    for (const t of tracks) {
+      for (const c of t.clips) {
+        if (!selection.includes(c.id)) continue
+        if (canDissolve(t)) visual.push(c)
+        if (canFade(t)) audible.push(c)
+      }
+    }
+    const first = (list, k) => list.find((c) => c[k] > 0)?.[k] ?? 0
+    return {
+      canDissolve: visual.length === 2,
+      dissolved: visual.filter((c) => c.dissolve > 0).length,
+      dissolve: first(visual, 'dissolve'),
+      fadeCount: audible.length,
+      fadeIn: first(audible, 'fadeIn'),
+      fadeOut: first(audible, 'fadeOut'),
+    }
+  }, [tracks, selection])
 
   // ---------- 音声付加 ⇄ アニメーション ----------
   /**
@@ -2141,6 +2223,10 @@ export default function App({
               tracks.reduce((n, t) => n + (t.type === 'bg' ? t.clips.filter((c) => selection.includes(c.id)).length : 0), 0) === 1
             }
             onAnimate={sound ? editInAnime : undefined}
+            effects={effectInfo}
+            onDissolve={dissolveSelection}
+            onClearDissolve={() => setSelectionEffects({ dissolve: 0, olMid: 0 }, canDissolve)}
+            onFade={(patch) => setSelectionEffects(patch, canFade)}
             onUndo={undo}
             onRedo={redo}
             sheetOpen={sheetOpen}

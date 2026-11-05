@@ -1,4 +1,4 @@
-import { activeClip, bgPastEnd, cellFrameIndex } from './timeline.js'
+import { bgFrame, cellFrameIndex, dissolvePairs } from './timeline.js'
 import { hasFx, pruneFxCache, renderFx } from './fx.js'
 
 /** src を dst の矩形にどう収めるか */
@@ -86,9 +86,10 @@ export function composite(ctx, view, time) {
     ctx.fillRect(0, 0, cw, ch)
   }
 
+  const pairs = dissolvePairs(tracks)
   for (const track of tracks) {
     if (!track.visible) continue
-    if (track.type === 'bg') drawBg(ctx, track, cw, ch, time)
+    if (track.type === 'bg') drawBg(ctx, track, cw, ch, time, pairs)
     else if (track.type === 'cell') drawCell(ctx, track, cw, ch, time)
   }
 
@@ -104,11 +105,11 @@ function shot(track, source, frameKey) {
 }
 
 /** 置き場所・不透明度・合成モード・回転・左右反転を当てはめて1枚描く */
-function drawPlaced(ctx, src, track, cw, ch) {
+function drawPlaced(ctx, src, track, cw, ch, alpha = 1) {
   const r = placeRect(track, track.width, track.height, cw, ch)
   const angle = trackAngle(track)
   const flip = !!track.flipX
-  ctx.globalAlpha = track.opacity
+  ctx.globalAlpha = track.opacity * alpha
   ctx.globalCompositeOperation = track.blend
 
   if (!angle && !flip) {
@@ -124,15 +125,15 @@ function drawPlaced(ctx, src, track, cw, ch) {
   ctx.restore()
 }
 
-function drawBg(ctx, track, cw, ch, time) {
+function drawBg(ctx, track, cw, ch, time, pairs) {
   if (!(track.width > 0)) return
   if (track.kind === 'video' && track.el.readyState < 2) return
-  const clip = activeClip(track, time)
-  if (!clip || bgPastEnd(track, clip, time)) return
+  const frame = bgFrame(track, time, pairs)
+  if (!frame || !(frame.alpha > 0)) return
 
   // 動画は毎フレーム絵が変わるのでキャッシュしない
   const src = shot(track, track.el, track.kind === 'video' ? null : 'still')
-  drawPlaced(ctx, src, track, cw, ch)
+  drawPlaced(ctx, src, track, cw, ch, frame.alpha)
 }
 
 function drawCell(ctx, track, cw, ch, time) {
