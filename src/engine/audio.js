@@ -1,5 +1,5 @@
 import { scheduleFade } from './timeline.js'
-import { hasMuffle, insertMuffle } from './muffle.js'
+import { insertVoiceFx } from './voiceFx.js'
 
 let sharedCtx = null
 
@@ -175,8 +175,8 @@ export function createAudioEngine() {
         const fade = ctx.createGain()
         scheduleFade(fade.gain, clip, clip.len, skip, (l) => t0 + Math.max(0, (clip.start + l - time) / rate))
         node.connect(fade)
-        // 「部屋の外」はフェードのあとに挟む
-        const fx = hasMuffle(clip) ? insertMuffle(ctx, fade, clip) : null
+        // 声のエフェクト(部屋の外 / 伝声管)はフェードのあとに挟む
+        const fx = insertVoiceFx(ctx, fade, clip)
         ;(fx ? fx.out : fade).connect(gain)
         gain.connect(master)
         node.start(

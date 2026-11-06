@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { BACKGROUND_ACCEPT } from '../engine/media.js'
 import { MUFFLE_DEFAULT } from '../engine/muffle.js'
+import { TUBE_DEFAULT } from '../engine/tube.js'
 
 function fmt(t) {
   const sign = t < 0 ? '-' : ''
@@ -39,6 +40,13 @@ const MUFFLE_PRESETS = [
   { label: '隣の部屋', title: '少しこもって、部屋の響きが乗る', muffle: 0.45, room: 0.3 },
   { label: 'ドア越し', title: 'はっきりこもる。いちばん普通の「部屋の外」', ...MUFFLE_DEFAULT },
   { label: '壁越し(遠い)', title: '分厚い壁の向こう。言葉はほとんど聞き取れない', muffle: 0.85, room: 0.35 },
+]
+
+/** 「伝声管」の出発点(管の細さ / 管の長さ。どれも 0〜1) */
+const TUBE_PRESETS = [
+  { label: 'ホーン', title: 'ラッパの口から出てくる声。鳴りは軽め', tube: 0.35, pipe: 0.15 },
+  { label: '伝声管', title: '金属の管を通って届く声。いちばん普通の「伝声管」', ...TUBE_DEFAULT },
+  { label: '長い管(遠く)', title: '細く長い管の向こう。カンカンと反響が残る', tube: 0.8, pipe: 0.7 },
 ]
 
 /**
@@ -166,6 +174,24 @@ function EffectsMenu({ info, onDissolve, onClearDissolve, onFade }) {
                 </button>
               ))}
               <button type="button" disabled={!(fades && info.muffled > 0)} onClick={() => onFade({ muffle: 0, room: 0 })}>
+                外す
+              </button>
+            </div>
+          </section>
+          <section className="fxmenu__group">
+            <h4>音声: 伝声管 / ホーン</h4>
+            <p className="fxmenu__hint">
+              {fades
+                ? 'ラッパや金属の管を通って出てくるような、細く鳴る声にします。細かい具合は左のパネルで'
+                : '音声のクリップを選んでください'}
+            </p>
+            <div className="fxmenu__row">
+              {TUBE_PRESETS.map((p) => (
+                <button key={p.label} type="button" className="primary" disabled={!fades} title={p.title} onClick={() => onFade({ tube: p.tube, pipe: p.pipe })}>
+                  {p.label}
+                </button>
+              ))}
+              <button type="button" disabled={!(fades && info.tubed > 0)} onClick={() => onFade({ tube: 0, pipe: 0 })}>
                 外す
               </button>
             </div>

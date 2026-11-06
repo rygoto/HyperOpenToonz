@@ -80,11 +80,21 @@ function ClipEffects({ track, clip, lenSec, pxPerSec, ol }) {
   const olPx = olSec * pxPerSec
   const olLeft = ol ? (ol.from - clip.start) * pxPerSec : 0
   const muffled = canFade(track) && clip.muffle > 0
+  const tubed = canFade(track) && clip.tube > 0
   return (
     <>
-      {muffled && (
-        <span className="clip__badge" title={`部屋の外(こもり具合 ${Math.round(clip.muffle * 100)}% / 響き ${Math.round((clip.room ?? 0) * 100)}%)`}>
-          壁
+      {(muffled || tubed) && (
+        <span className="clip__badges">
+          {muffled && (
+            <span className="clip__badge" title={`部屋の外(こもり具合 ${Math.round(clip.muffle * 100)}% / 響き ${Math.round((clip.room ?? 0) * 100)}%)`}>
+              壁
+            </span>
+          )}
+          {tubed && (
+            <span className="clip__badge" title={`伝声管(管の細さ ${Math.round(clip.tube * 100)}% / 管の長さ ${Math.round((clip.pipe ?? 0) * 100)}%)`}>
+              管
+            </span>
+          )}
         </span>
       )}
       {fadeIn > 0 && (

@@ -143,6 +143,23 @@ function MuffleFields({ clip, onPatch }) {
   )
 }
 
+/** 音声の「伝声管」の調整(掛かっているクリップだけ) */
+function TubeFields({ clip, onPatch }) {
+  return (
+    <div className="muffle">
+      <div className="muffle__head">
+        <span>伝声管</span>
+        <button type="button" title="「伝声管」を外す" onClick={() => onPatch({ tube: undefined, pipe: undefined })}>
+          外す
+        </button>
+      </div>
+      <DraftRange label="管の細さ" value={clip.tube} min={0.05} onCommit={(tube) => onPatch({ tube })} />
+      <DraftRange label="管の長さ(反響)" value={clip.pipe ?? 0} onCommit={(pipe) => onPatch({ pipe: pipe > 0 ? pipe : undefined })} />
+      <p className="layer__effects-hint">細くするほど帯域が狭く鼻にかかった声に、長くするほど管の中でカンカンと反響します</p>
+    </div>
+  )
+}
+
 /**
  * 選んだクリップに掛けたエフェクトの調整。
  *   音のフェード … フェードを掛けられるクリップならいつも出す(0 で外す)
@@ -200,8 +217,9 @@ function ClipEffectsFields({ track, clip, olPairs, onPatch }) {
       )}
       {fade && <p className="layer__effects-hint">0 でフェードなし</p>}
       {fade && clip.muffle > 0 && <MuffleFields key={clip.id} clip={clip} onPatch={onPatch} />}
-      {fade && !(clip.muffle > 0) && (
-        <p className="layer__effects-hint">「部屋の外」(こもった声)は再生バーの「エフェクト ▾」から掛けられます</p>
+      {fade && clip.tube > 0 && <TubeFields key={`tube-${clip.id}`} clip={clip} onPatch={onPatch} />}
+      {fade && !(clip.muffle > 0 && clip.tube > 0) && (
+        <p className="layer__effects-hint">「部屋の外」(こもった声)と「伝声管」(管から出てくる声)は再生バーの「エフェクト ▾」から掛けられます</p>
       )}
     </div>
   )

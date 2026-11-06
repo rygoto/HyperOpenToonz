@@ -139,10 +139,10 @@ export function splitClip(track, clip, at) {
   const min = minUnits(track)
   if (off < min || clip.len - off < min) return null
   // フェードインとオーバーラップ(頭に掛かるもの)は前、フェードアウト(尻)は後ろに残す。
-  // 「部屋の外」はクリップ全体に掛かるので両方に残す
+  // 「部屋の外」「伝声管」はクリップ全体に掛かるので両方に残す
   const { fadeOut, ...head } = clip
   const whole = {}
-  for (const k of ['muffle', 'room']) if (clip[k] > 0) whole[k] = clip[k]
+  for (const k of ['muffle', 'room', 'tube', 'pipe']) if (clip[k] > 0) whole[k] = clip[k]
   return [
     { ...head, len: off },
     { id: nextId('clip'), start: at, in: clip.in + off, len: clip.len - off, ...(fadeOut > 0 ? { fadeOut } : {}), ...whole },

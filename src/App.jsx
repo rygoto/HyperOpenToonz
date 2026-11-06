@@ -1076,6 +1076,7 @@ export default function App({
       fadeIn: first(audible, 'fadeIn'),
       fadeOut: first(audible, 'fadeOut'),
       muffled: audible.filter((c) => c.muffle > 0).length,
+      tubed: audible.filter((c) => c.tube > 0).length,
     }
   }, [tracks, selection])
 

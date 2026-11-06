@@ -1,6 +1,6 @@
 import { audioContext } from './audio.js'
 import { scheduleFade } from './timeline.js'
-import { hasMuffle, insertMuffle } from './muffle.js'
+import { insertVoiceFx } from './voiceFx.js'
 
 /** H.264 は偶数解像度が必要なので揃える */
 export function evenSize(n) {
@@ -50,8 +50,8 @@ function scheduleClips(ctx, master, track, buffer, gainValue, dur) {
     const fade = ctx.createGain()
     scheduleFade(fade.gain, clip, clip.len, 0, (l) => Math.max(0, clip.start + l))
     src.connect(fade)
-    // 「部屋の外」はフェードのあとに挟む(プレビューと同じ順)
-    const fx = hasMuffle(clip) ? insertMuffle(ctx, fade, clip) : null
+    // 声のエフェクト(部屋の外 / 伝声管)はフェードのあとに挟む(プレビューと同じ順)
+    const fx = insertVoiceFx(ctx, fade, clip)
     ;(fx ? fx.out : fade).connect(gain)
     gain.connect(master)
     src.start(Math.max(0, clip.start), skip, playDur)

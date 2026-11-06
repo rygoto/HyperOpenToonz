@@ -33,6 +33,8 @@ import {
 } from '../src/engine/scene.js'
 import { createClock } from '../src/engine/clock.js'
 import { insertMuffle, muffleParams } from '../src/engine/muffle.js'
+import { insertTube, tubeParams } from '../src/engine/tube.js'
+import { insertVoiceFx } from '../src/engine/voiceFx.js'
 import {
   EMPTY,
   applySheet,
@@ -1461,6 +1463,53 @@ test('オーバーラップ: 離れた2つには掛けない。接している�
   assert.deepEqual(dissolvePairs(butt), [])
 })
 
+test('エフェクト: 保存して開き直すと、復元したクリップに全部のエフェクトが戻る(.piyo → restoreScene)', async () => {
+  const { packBundle, trackSources, unpackBundle } = await import('../src/engine/bundle.js')
+  const { restoreScene } = await import('../src/engine/scene.js')
+  // ブラウザの画像 / 音声の読み込みだけ差し替える(中身の解析はしない)
+  const hadWindow = 'window' in globalThis
+  const hadImage = 'Image' in globalThis
+  const fakeBuffer = { duration: 10, length: 1000, sampleRate: 100, numberOfChannels: 1, getChannelData: () => new Float32Array(1000) }
+  globalThis.window ??= {}
+  globalThis.window.AudioContext ??= class {
+    decodeAudioData() {
+      return Promise.resolve(fakeBuffer)
+    }
+  }
+  globalThis.Image ??= class {
+    naturalWidth = 64
+    naturalHeight = 36
+    decode() {
+      return Promise.resolve()
+    }
+  }
+  try {
+    const bytes = (n, seed) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 0xff)
+    const p1 = markPath(new File([bytes(200, 1)], 'a.png', { type: 'image/png' }), 'work/a.png')
+    const p2 = markPath(new File([bytes(200, 2)], 'b.png', { type: 'image/png' }), 'work/b.png')
+    const wav = markPath(new File([bytes(300, 3)], 'serif.wav', { type: 'audio/wav' }), 'work/serif.wav')
+    const tracks = [
+      bgTrack({ id: 'x', name: 'a', fileName: 'a.png', path: 'work/a.png', sources: [p1], fx: undefined, clips: [{ id: 'a', start: 0, in: 0, len: 2.5 }] }),
+      bgTrack({ id: 'y', name: 'b', fileName: 'b.png', path: 'work/b.png', sources: [p2], fx: undefined, clips: [{ id: 'b', start: 1.5, in: 0, len: 2, dissolve: 1, olMid: 0.8 }] }),
+      audioTrack({ name: 'serif', fileName: 'serif.wav', path: 'work/serif.wav', sources: [wav], clips: [{ id: 'c', start: 0, in: 0, len: 4, fadeIn: 0.5, fadeOut: 1, muffle: 0.6, room: 0.25, tube: 0.55, pipe: 0.35 }] }),
+    ]
+    const doc = serializeScene({ tracks, stage: {}, projectFps: 24, muted: false, volume: 1, name: 'fx', folders: [], mode: 'sound' })
+    const { text, files } = await unpackBundle(new File([await packBundle(doc, trackSources(tracks).assets)], 'fx.piyo'))
+    const out = await restoreScene(parseScene(text), makePool(files))
+    assert.deepEqual(out.skipped, [])
+    const fx = (t) => t.clips.map(({ id, ...c }) => c)
+    assert.deepEqual(fx(out.tracks[0]), [{ start: 0, in: 0, len: 2.5 }])
+    assert.deepEqual(fx(out.tracks[1]), [{ start: 1.5, in: 0, len: 2, dissolve: 1, olMid: 0.8 }])
+    assert.deepEqual(fx(out.tracks[2]), [{ start: 0, in: 0, len: 4, fadeIn: 0.5, fadeOut: 1, muffle: 0.6, room: 0.25, tube: 0.55, pipe: 0.35 }])
+    // 復元したものでも、オーバーラップの替わり方がそのまま効く
+    const [p] = dissolvePairs(out.tracks)
+    assert.ok(Math.abs(bgFrame(out.tracks[1], 2, [p]).alpha - 0.8) < 1e-9)
+  } finally {
+    if (!hadWindow) delete globalThis.window
+    if (!hadImage) delete globalThis.Image
+  }
+})
+
 test('部屋の外: こもり具合を上げるほど低いところから削り、小さくなる', () => {
   const light = muffleParams({ muffle: 0.2, room: 0 })
   const heavy = muffleParams({ muffle: 0.9, room: 0 })
@@ -1488,6 +1537,52 @@ test('部屋の外: 響きが 0 なら残響をつながない。分割しても
   const t = audioTrack()
   const [a, b] = splitClip(t, { id: 'c', start: 0, in: 0, len: 4, muffle: 0.6, room: 0.2, fadeIn: 1 }, 2)
   assert.deepEqual([a.muffle, a.room, b.muffle, b.room, b.fadeIn], [0.6, 0.2, 0.6, 0.2, undefined])
+})
+
+test('伝声管: 細くするほど帯域が狭く、鳴りが強い。長さ 0 なら反響しない', () => {
+  const thin = tubeParams({ tube: 0.9, pipe: 0 })
+  const wide = tubeParams({ tube: 0.2, pipe: 0 })
+  assert.ok(thin.highpass > wide.highpass && thin.lowpass < wide.lowpass)
+  assert.ok(thin.peaks[0].db > wide.peaks[0].db)
+  assert.equal(wide.wet, 0)
+  const long = tubeParams({ tube: 0.5, pipe: 1 })
+  assert.ok(long.delay > tubeParams({ tube: 0.5, pipe: 0.2 }).delay)
+  assert.ok(long.feedback > 0 && long.feedback < 0.9) // 帰還は発振しない強さまで
+})
+
+test('伝声管: 部屋の外と重ねると順につながる。分割しても両方に残る', () => {
+  const made = []
+  const param = () => ({ value: 0 })
+  const node = (kind) => {
+    const n = { kind, frequency: param(), Q: param(), gain: param(), delayTime: param(), to: [], connect: (x) => n.to.push(x) }
+    made.push(n)
+    return n
+  }
+  const ctx = {
+    sampleRate: 8000,
+    createBiquadFilter: () => node('biquad'),
+    createGain: () => node('gain'),
+    createConvolver: () => node('conv'),
+    createDelay: () => node('delay'),
+    createWaveShaper: () => node('shaper'),
+    createBuffer: (c, l) => ({ getChannelData: () => new Float32Array(l) }),
+  }
+  const input = node('in')
+  const solo = insertTube(ctx, input, { tube: 0.5 })
+  assert.equal(made.some((n) => n.kind === 'delay'), false)
+  assert.ok(solo.nodes.includes(solo.out))
+  insertTube(ctx, input, { tube: 0.5, pipe: 0.4 })
+  const delay = made.find((n) => n.kind === 'delay')
+  assert.ok(delay && delay.delayTime.value > 0)
+
+  assert.equal(insertVoiceFx(ctx, input, { fadeIn: 1 }), null)
+  const both = insertVoiceFx(ctx, input, { muffle: 0.6, tube: 0.5 })
+  // 部屋の外の出口が伝声管の入口へつながっている
+  const muffleOut = both.nodes.find((n) => n.kind === 'gain' && n.to.some((x) => x.kind === 'biquad'))
+  assert.ok(muffleOut)
+
+  const [a, b] = splitClip(audioTrack(), { id: 'c', start: 0, in: 0, len: 4, tube: 0.5, pipe: 0.3 }, 2)
+  assert.deepEqual([a.tube, a.pipe, b.tube, b.pipe], [0.5, 0.3, 0.5, 0.3])
 })
 
 test('フェード: 頭と尻で音量が 0 から 1、1 から 0 へ', () => {
